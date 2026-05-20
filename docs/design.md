@@ -75,14 +75,16 @@ exercise it directly.
 4. nodes_doc    = load_yaml_doc(args.nodes)         # the kubectl-get-nodes Node-list doc
 5. ds_doc, passthrough_docs = split_daemonset(base_docs)
        # validates: exactly one DaemonSet, exactly one container, no initContainers
-6. node_infos, taints  = extract_nodes(nodes_doc)
+6. node_infos  = extract_nodes(nodes_doc)
        # NodeInfo = (hostname, cores, taints). Skips unschedulable / NotReady.
-7. tolerated_taints, excluded_hostnames = resolve_tolerations(args, taints, node_infos)
-       # see Section 4 (Transformations)
+7. final_tolerations, usable_node_infos = resolve_tolerations(args, node_infos)
+       # Determines the final toleration list (per Section 4.4 table) and
+       # filters out any node carrying a taint not matched by the final
+       # toleration set. See Section 4 (Transformations).
 8. groups       = group_by_cores(usable_node_infos)
        # dict[int, list[str]] -- cores -> sorted hostnames
        # validates: at least one usable node
-9. variants     = [build_variant(ds_doc, cores, hostnames, args, tolerated_taints)
+9. variants     = [build_variant(ds_doc, cores, hostnames, args, final_tolerations)
                    for cores, hostnames in sorted(groups.items())]
        # each variant is a deep-copied DaemonSet with name suffix, resources,
        # nodeAffinity, and tolerations applied
@@ -173,10 +175,12 @@ file contains any taints:
 
 | `--tolerate` supplied? | Taints in nodes? | TTY? | Behavior |
 |---|---|---|---|
-| Yes (>=1) | n/a | n/a | Tolerations replaced wholesale by CLI values. Nodes whose taints are not **all** matched by some supplied toleration are excluded from grouping. |
-| No | No | n/a | Base manifest's `tolerations` are left as-is. |
-| No | Yes | Yes (TTY) | InquirerPy **checkbox** prompt lists each distinct `(key, value, effect)` taint with the count of nodes carrying it. Selected taints become tolerations on every output variant. Nodes carrying any **unselected** taint are excluded from grouping. |
+| Yes (>=1) | n/a | n/a | Final tolerations = the CLI values only. The base manifest's `tolerations` are **discarded**. Nodes whose taints are not **all** matched by some final toleration are excluded from grouping. |
+| No | No | n/a | Final tolerations = the base manifest's `tolerations` unchanged. No exclusions. |
+| No | Yes | Yes (TTY) | InquirerPy **checkbox** prompt lists each distinct `(key, value, effect)` taint with the count of nodes carrying it. Final tolerations = the base manifest's `tolerations` **plus** one toleration per selected taint (appended, no dedupe across the two sets). Nodes carrying any **unselected** taint are excluded from grouping. |
 | No | Yes | No (piped) | **Hard error**, listing the distinct taints. Tells the user to rerun interactively or supply `--tolerate` flags explicitly. |
+
+The rule is: an **explicit** `--tolerate` set replaces what's in the base manifest; an **interactive** selection augments it. This lets operators who care take full control, while interactive users don't accidentally lose tolerations they didn't know were there.
 
 A taint `T` "matches" a toleration `R` when:
 - `R.key == T.key`, AND
@@ -242,14 +246,17 @@ it errors.
 ### 6.1 Nodes file
 
 The nodes file is the YAML output of `kubectl get nodes -o yaml`. It is a
-single document of `Kind: List` (or equivalent) containing `items[]`, each of
-which is a `Node` object. For each node, the tool extracts:
+single document with `apiVersion: v1`, `kind: List`, containing `items[]`,
+each of which is a `Node` object. For each node, the tool extracts:
 
 - **Hostname**: `metadata.name` (which equals the `kubernetes.io/hostname`
   label value for normal clusters).
 - **Core count**: `status.capacity.cpu`. Accepted forms: integer string
-  (`"8"`), millicore string (`"8000m"`), or fractional string (`"8.0"`). The
-  parser converts each to an integer core count; non-integer results error.
+  (`"8"`), millicore string (`"8000m"`), or decimal string that reduces to
+  a whole integer (`"8.0"`, `"8000m"` -> `8`). Values that do not reduce to
+  a whole integer (e.g., `"7.5"`, `"7500m"`) are an error — DaemonSet
+  pods are scheduled per-node and need integer core counts to drive the
+  formula sensibly.
 - **Taints**: `spec.taints[]` (each having `key`, `value`, `effect`). May be
   absent.
 - **Schedulability**: `spec.unschedulable` (bool) and the `Ready` condition
