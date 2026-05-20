@@ -1,0 +1,22 @@
+# Source: chart/templates/sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: helm-sa
+# Source: chart/templates/daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: helm-nano
+spec:
+  selector:
+    matchLabels:
+      app: helm-nano
+  template:
+    metadata:
+      labels:
+        app: helm-nano
+    spec:
+      containers:
+      - name: helm-nano
+        image: spyderbat/nano:v1

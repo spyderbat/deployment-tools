@@ -59,3 +59,36 @@ def test_write_output_missing_dir(tmp_path):
     p = tmp_path / "nope" / "out.yaml"
     with pytest.raises(InputValidationError, match="output directory"):
         write_output(p, [{"kind": "A"}])
+
+
+def test_load_yaml_docs_handles_helm_concatenated(tmp_path):
+    """Helm output concatenates docs with `# Source:` comments and no `---`.
+    The loader must inject separators so ruamel parses them as multiple docs."""
+    p = tmp_path / "helm.yaml"
+    p.write_text(
+        "# Source: chart/templates/sa.yaml\n"
+        "apiVersion: v1\n"
+        "kind: ServiceAccount\n"
+        "metadata:\n"
+        "  name: sa-1\n"
+        "# Source: chart/templates/ds.yaml\n"
+        "apiVersion: apps/v1\n"
+        "kind: DaemonSet\n"
+        "metadata:\n"
+        "  name: ds-1\n"
+    )
+    docs = load_yaml_docs(p)
+    assert len(docs) == 2
+    assert docs[0]["kind"] == "ServiceAccount"
+    assert docs[1]["kind"] == "DaemonSet"
+
+
+def test_load_yaml_docs_existing_separators_unchanged(tmp_path):
+    """Files that already have `---` separators must still parse correctly
+    (no double-separator injection)."""
+    p = tmp_path / "ok.yaml"
+    p.write_text("apiVersion: v1\nkind: A\n---\napiVersion: v1\nkind: B\n")
+    docs = load_yaml_docs(p)
+    assert len(docs) == 2
+    assert docs[0]["kind"] == "A"
+    assert docs[1]["kind"] == "B"

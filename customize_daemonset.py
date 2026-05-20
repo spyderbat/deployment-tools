@@ -5,6 +5,7 @@
 import argparse
 import copy
 import pathlib
+import re
 import sys
 from dataclasses import dataclass
 
@@ -462,6 +463,39 @@ def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerati
     return v
 
 
+_APIVERSION_AT_BOL = re.compile(r"^apiVersion:", re.MULTILINE)
+
+
+_DOC_SEPARATOR = re.compile(r"^---[ \t]*$", re.MULTILINE)
+
+
+def _inject_doc_separators(text: str) -> str:
+    """Insert `---\n` before every top-level `apiVersion:` line that is
+    not the first one and is not already preceded by a `---` separator,
+    so multi-doc YAML files that lack `---` separators (e.g. `helm template`
+    output) parse correctly under ruamel.yaml."""
+    matches = list(_APIVERSION_AT_BOL.finditer(text))
+    if len(matches) <= 1:
+        return text
+    # Walk backwards so earlier-position offsets remain valid.
+    for m in reversed(matches[1:]):
+        # Check if the text before this apiVersion: already ends with a --- line.
+        preceding = text[:m.start()].rstrip(" \t\n")
+        if preceding.endswith("---") or _DOC_SEPARATOR.search(text[:m.start()]):
+            # Only inject if no --- is already directly before this apiVersion:.
+            # More precisely: check if the last non-blank line before this match
+            # is already a --- separator.
+            lines_before = text[:m.start()].rstrip("\n").splitlines()
+            last_nonempty = next(
+                (l.rstrip() for l in reversed(lines_before) if l.strip()),
+                ""
+            )
+            if last_nonempty == "---":
+                continue
+        text = text[:m.start()] + "---\n" + text[m.start():]
+    return text
+
+
 def _yaml():
     y = YAML(typ="rt")  # round-trip
     y.preserve_quotes = True
@@ -474,7 +508,8 @@ def load_yaml_docs(path) -> list:
     if not path.exists():
         raise InputValidationError(f"base manifest not found: {path}")
     try:
-        return list(_yaml().load_all(path.read_text()))
+        text = _inject_doc_separators(path.read_text())
+        return list(_yaml().load_all(text))
     except (ParserError, ScannerError) as e:
         raise InputValidationError(f"failed to parse {path}: {e}") from e
 
