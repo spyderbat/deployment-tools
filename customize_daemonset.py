@@ -2,6 +2,7 @@
 """Generate per-core-count DaemonSet variants from a base manifest and a
 `kubectl get nodes -o yaml` file. See docs/design.md for the full spec."""
 
+import copy
 from dataclasses import dataclass
 
 
@@ -368,3 +369,87 @@ def group_by_cores(nodes):
     for n in nodes:
         buckets.setdefault(n.cores, []).append(n.hostname)
     return {cores: sorted(hosts) for cores, hosts in sorted(buckets.items())}
+
+
+def split_daemonset(docs):
+    """Validate and split a list of YAML documents.
+
+    Returns (the_one_daemonset, list_of_other_documents_in_input_order).
+    Skips None entries (empty YAML documents).
+    """
+    daemonsets = []
+    passthrough = []
+    for doc in docs:
+        if doc is None:
+            continue
+        if not isinstance(doc, dict):
+            raise InputValidationError(
+                f"base manifest contains a non-mapping document: {type(doc).__name__}"
+            )
+        if doc.get("kind") == "DaemonSet":
+            daemonsets.append(doc)
+        else:
+            passthrough.append(doc)
+
+    if len(daemonsets) == 0:
+        raise InputValidationError("base manifest contains no DaemonSet")
+    if len(daemonsets) > 1:
+        names = [(d.get("metadata") or {}).get("name", "<unnamed>")
+                 for d in daemonsets]
+        raise InputValidationError(
+            f"base manifest contains {len(daemonsets)} DaemonSets, expected 1: {names}"
+        )
+
+    ds = daemonsets[0]
+    ds_name = (ds.get("metadata") or {}).get("name", "<unnamed>")
+    pod_spec = (((ds.get("spec") or {}).get("template") or {}).get("spec") or {})
+    containers = pod_spec.get("containers") or []
+    if len(containers) != 1:
+        raise InputValidationError(
+            f"DaemonSet {ds_name!r} has {len(containers)} containers, expected 1"
+        )
+    if pod_spec.get("initContainers"):
+        raise InputValidationError(
+            f"DaemonSet {ds_name!r} has initContainers, not supported"
+        )
+    return ds, passthrough
+
+
+def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerations):
+    """Build a single DaemonSet variant from the base DS.
+
+    `final_tolerations` is either a list of dicts to apply (replacing any
+    existing tolerations) or None (leave the base manifest's tolerations
+    untouched).
+    """
+    v = copy.deepcopy(base)
+    base_name = (v.get("metadata") or {}).get("name", "daemonset")
+    v["metadata"]["name"] = f"{base_name}-{cores}core"
+
+    container = v["spec"]["template"]["spec"]["containers"][0]
+    container["resources"] = compute_resources(
+        cores=cores, cpu_per_core_millis=cpu_per_core_millis
+    )
+
+    pod_spec = v["spec"]["template"]["spec"]
+    affinity = pod_spec.setdefault("affinity", {})
+    affinity["nodeAffinity"] = {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "kubernetes.io/hostname",
+                            "operator": "In",
+                            "values": sorted(hostnames),
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+    if final_tolerations is not None:
+        pod_spec["tolerations"] = list(final_tolerations)
+
+    return v
