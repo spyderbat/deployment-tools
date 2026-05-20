@@ -2,6 +2,8 @@
 """Generate per-core-count DaemonSet variants from a base manifest and a
 `kubectl get nodes -o yaml` file. See docs/design.md for the full spec."""
 
+from dataclasses import dataclass
+
 
 class CustomizerError(Exception):
     """Base class for all expected, user-facing errors."""
@@ -13,6 +15,24 @@ class InputValidationError(CustomizerError):
 
 class InteractiveCancelled(CustomizerError):
     """Raised when the user cancels an interactive prompt (Ctrl-C / EOF)."""
+
+
+VALID_TAINT_EFFECTS = ("NoSchedule", "PreferNoSchedule", "NoExecute")
+
+
+@dataclass(frozen=True)
+class Taint:
+    key: str
+    value: str   # may be ""
+    effect: str  # one of VALID_TAINT_EFFECTS
+
+
+@dataclass(frozen=True)
+class Toleration:
+    key: str
+    operator: str   # "Equal" or "Exists"
+    value: str      # "" when operator == "Exists"
+    effect: str     # one of VALID_TAINT_EFFECTS, or "" to match all
 
 
 def parse_millicores(value: str) -> int:
@@ -83,3 +103,51 @@ def compute_resources(*, cores: int, cpu_per_core_millis: int) -> dict:
             "memory": format_memory_mi(mem_limit_mi),
         },
     }
+
+
+def parse_cpu_per_core_arg(value: str) -> int:
+    """Parse the --cpu-request-per-core flag value into integer millicores."""
+    return parse_millicores(value)
+
+
+def parse_tolerate_arg(value: str) -> Toleration:
+    """Parse a --tolerate flag value into a Toleration.
+
+    Accepted forms:
+        key=value:effect   -> operator Equal
+        key:effect         -> operator Exists, no value
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InputValidationError(f"invalid --tolerate {value!r}: empty")
+    s = value.strip()
+
+    colons = s.count(":")
+    if colons != 1:
+        raise InputValidationError(
+            f"invalid --tolerate {value!r}: expected exactly one ':' separator"
+        )
+    left, effect = s.split(":", 1)
+    if effect not in VALID_TAINT_EFFECTS:
+        raise InputValidationError(
+            f"invalid --tolerate {value!r}: effect must be one of "
+            f"{VALID_TAINT_EFFECTS}"
+        )
+
+    equals = left.count("=")
+    if equals == 0:
+        # Exists form
+        if not left:
+            raise InputValidationError(f"invalid --tolerate {value!r}: empty key")
+        return Toleration(key=left, operator="Exists", value="", effect=effect)
+    if equals == 1:
+        key, val = left.split("=", 1)
+        if not key:
+            raise InputValidationError(f"invalid --tolerate {value!r}: empty key")
+        if not val:
+            raise InputValidationError(
+                f"invalid --tolerate {value!r}: empty value (use 'key:effect' for Exists)"
+            )
+        return Toleration(key=key, operator="Equal", value=val, effect=effect)
+    raise InputValidationError(
+        f"invalid --tolerate {value!r}: too many '=' separators"
+    )
