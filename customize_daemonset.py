@@ -592,20 +592,68 @@ def main(argv=None) -> int:
         return 1
 
 
-# Stubs for interactive helpers; implemented in Task 14.
+def _import_inquirer():
+    try:
+        from InquirerPy import inquirer
+        from InquirerPy.base.control import Choice
+        from InquirerPy.validator import PathValidator
+    except ImportError as e:
+        raise InputValidationError(
+            "InquirerPy is required for interactive mode "
+            "(pip install InquirerPy)"
+        ) from e
+    return inquirer, Choice, PathValidator
+
+
 def prompt_for_missing_inputs(args, is_tty):
-    if not args.base or not args.nodes:
+    """In TTY mode, fill in any missing required args via InquirerPy.
+    Non-TTY mode: error out for any missing required arg."""
+    if not is_tty:
         missing = [n for n, v in
                    [("--base", args.base), ("--nodes", args.nodes)] if not v]
-        raise InputValidationError(
-            f"missing required argument(s): {', '.join(missing)}"
-        )
+        if missing:
+            raise InputValidationError(
+                f"missing required argument(s): {', '.join(missing)}"
+            )
+        return
+
+    inquirer, _Choice, PathValidator = _import_inquirer()
+    try:
+        if not args.base:
+            args.base = inquirer.filepath(
+                message="Path to base manifest YAML:",
+                validate=PathValidator(is_file=True,
+                                       message="file does not exist"),
+            ).execute()
+        if not args.nodes:
+            args.nodes = inquirer.filepath(
+                message="Path to `kubectl get nodes -o yaml` output:",
+                validate=PathValidator(is_file=True,
+                                       message="file does not exist"),
+            ).execute()
+    except KeyboardInterrupt as e:
+        raise InteractiveCancelled("cancelled") from e
 
 
 def prompt_for_taints(taint_map):
-    raise InputValidationError(
-        "interactive taint selection not yet implemented"
-    )
+    """Show a checkbox prompt for each distinct taint; return set[Taint] selected."""
+    inquirer, Choice, _PathValidator = _import_inquirer()
+    choices = [
+        Choice(value=t,
+               name=f"{t.key}{('=' + t.value) if t.value else ''}:{t.effect}"
+                    f"  ({len(hosts)} nodes)")
+        for t, hosts in taint_map.items()
+    ]
+    try:
+        selected = inquirer.checkbox(
+            message="Select taints to tolerate "
+                    "(nodes with unselected taints will be excluded):",
+            choices=choices,
+            instruction="(space to toggle, enter to confirm)",
+        ).execute()
+    except KeyboardInterrupt as e:
+        raise InteractiveCancelled("cancelled") from e
+    return set(selected)
 
 
 if __name__ == "__main__":
