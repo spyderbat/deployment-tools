@@ -1,0 +1,2 @@
+ruamel.yaml>=0.18
+InquirerPy>=0.3.4
