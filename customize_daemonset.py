@@ -271,3 +271,87 @@ def taint_matches_toleration(taint: Taint, tol: Toleration) -> bool:
     if tol.operator == "Equal":
         return tol.value == taint.value
     return False
+
+
+def _toleration_to_dict(t: Toleration) -> dict:
+    out = {"key": t.key, "operator": t.operator}
+    if t.operator == "Equal":
+        out["value"] = t.value
+    if t.effect:
+        out["effect"] = t.effect
+    return out
+
+
+def _filter_nodes_by_tolerations(nodes, tolerations):
+    """Return (usable, excluded_hostnames). A node is usable iff every taint
+    it carries is matched by at least one toleration."""
+    usable = []
+    excluded = []
+    for n in nodes:
+        if all(any(taint_matches_toleration(t, r) for r in tolerations)
+               for t in n.taints):
+            usable.append(n)
+        else:
+            excluded.append(n.hostname)
+    return usable, excluded
+
+
+def resolve_tolerations(
+    *,
+    nodes,
+    explicit_tolerations,
+    base_tolerations,
+    is_tty: bool,
+    prompt_fn=None,
+):
+    """Determine final tolerations and usable nodes per §4.4 of the spec.
+
+    Args:
+        nodes: list[NodeInfo] (already filtered for schedulability).
+        explicit_tolerations: list[Toleration] from --tolerate flags.
+        base_tolerations: list[dict] from the base manifest's
+            spec.template.spec.tolerations, or None.
+        is_tty: whether stdin is a TTY (controls interactive prompt path).
+        prompt_fn: callable(distinct_taints_dict) -> set[Taint] selected.
+            Used only on the no-explicit + has-taints + TTY path.
+
+    Returns:
+        (final_tolerations_as_dicts, usable_nodes, excluded_hostnames)
+    """
+    taint_map = distinct_taints(nodes)
+
+    if explicit_tolerations:
+        final = list(explicit_tolerations)
+        usable, excluded = _filter_nodes_by_tolerations(nodes, final)
+        return [_toleration_to_dict(t) for t in final], usable, excluded
+
+    if not taint_map:
+        # No taints anywhere -- preserve base tolerations as-is.
+        return (list(base_tolerations) if base_tolerations else None,
+                list(nodes), [])
+
+    # Taints exist but no explicit --tolerate.
+    if not is_tty:
+        taint_summary = ", ".join(
+            f"{t.key}{('=' + t.value) if t.value else ''}:{t.effect} ({len(hosts)} nodes)"
+            for t, hosts in taint_map.items()
+        )
+        raise InputValidationError(
+            f"tainted nodes detected: {taint_summary}. "
+            f"Rerun interactively or supply --tolerate."
+        )
+
+    if prompt_fn is None:
+        raise InputValidationError(
+            "interactive taint prompt requested but no prompt_fn provided"
+        )
+    selected = prompt_fn(taint_map)  # set[Taint]
+    new_tols = [Toleration(key=t.key,
+                            operator="Equal" if t.value else "Exists",
+                            value=t.value,
+                            effect=t.effect)
+                for t in selected]
+    final_dicts = list(base_tolerations) if base_tolerations else []
+    final_dicts.extend(_toleration_to_dict(t) for t in new_tols)
+    usable, excluded = _filter_nodes_by_tolerations(nodes, new_tols)
+    return final_dicts, usable, excluded
