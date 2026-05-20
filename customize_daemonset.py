@@ -35,6 +35,13 @@ class Toleration:
     effect: str     # one of VALID_TAINT_EFFECTS, or "" to match all
 
 
+@dataclass(frozen=True)
+class NodeInfo:
+    hostname: str
+    cores: int
+    taints: tuple  # tuple[Taint, ...]
+
+
 def parse_millicores(value: str) -> int:
     """Parse a Kubernetes CPU quantity string into an integer number of millicores.
 
@@ -171,3 +178,74 @@ def parse_tolerate_arg(value: str) -> Toleration:
     raise InputValidationError(
         f"invalid --tolerate {value!r}: too many '=' separators"
     )
+
+
+def _node_is_ready(node: dict) -> bool:
+    conditions = (node.get("status") or {}).get("conditions") or []
+    for c in conditions:
+        if c.get("type") == "Ready":
+            return c.get("status") == "True"
+    return False
+
+
+def _node_taints(node: dict) -> tuple:
+    raw = (node.get("spec") or {}).get("taints") or []
+    out = []
+    for t in raw:
+        key = t.get("key")
+        effect = t.get("effect")
+        value = t.get("value", "") or ""
+        if not key or effect not in VALID_TAINT_EFFECTS:
+            raise InputValidationError(
+                f"node {(node.get('metadata') or {}).get('name')!r} has malformed taint: {t!r}"
+            )
+        out.append(Taint(key=key, value=value, effect=effect))
+    return tuple(out)
+
+
+def extract_nodes(nodes_doc: dict):
+    """Parse a kubectl-get-nodes-o-yaml doc into NodeInfo list, plus skipped names.
+
+    Filters out nodes where `spec.unschedulable` is true or `Ready` is not True.
+    Returns (nodes, skipped_hostnames).
+    """
+    if not isinstance(nodes_doc, dict):
+        raise InputValidationError("nodes file root is not a YAML mapping")
+    if nodes_doc.get("kind") != "List":
+        raise InputValidationError(
+            f"nodes file is not a kubectl get nodes -o yaml output "
+            f"(kind={nodes_doc.get('kind')!r}, expected 'List')"
+        )
+    items = nodes_doc.get("items")
+    if items is None:
+        raise InputValidationError("nodes file has no 'items' list")
+    if not isinstance(items, list):
+        raise InputValidationError("nodes file 'items' is not a list")
+
+    nodes = []
+    skipped = []
+    for idx, item in enumerate(items):
+        meta = item.get("metadata") or {}
+        name = meta.get("name")
+        if not name:
+            raise InputValidationError(
+                f"node at index {idx}: missing metadata.name"
+            )
+        capacity = ((item.get("status") or {}).get("capacity") or {}).get("cpu")
+        if capacity is None:
+            raise InputValidationError(
+                f"node {name!r}: missing status.capacity.cpu"
+            )
+        if (item.get("spec") or {}).get("unschedulable") is True:
+            skipped.append(name)
+            continue
+        if not _node_is_ready(item):
+            skipped.append(name)
+            continue
+        try:
+            cores = parse_node_cores(capacity)
+        except InputValidationError as e:
+            raise InputValidationError(f"node {name!r}: {e}") from e
+        taints = _node_taints(item)
+        nodes.append(NodeInfo(hostname=name, cores=cores, taints=taints))
+    return nodes, skipped
