@@ -671,14 +671,21 @@ def prompt_for_missing_inputs(args, is_tty):
 
 
 def prompt_for_taints(taint_map):
-    """Show a checkbox prompt for each distinct taint; return set[Taint] selected."""
+    """Show a checkbox prompt for each distinct taint; return set[Taint] selected.
+
+    Uses string labels (not Taint dataclasses) as Choice values, because
+    InquirerPy 0.3.4 returns the full Choice as a dict for non-primitive
+    values, which would break `set(...)` aggregation. The label-to-Taint
+    map is rebuilt locally for lookup.
+    """
     inquirer, Choice, _PathValidator = _import_inquirer()
-    choices = [
-        Choice(value=t,
-               name=f"{t.key}{('=' + t.value) if t.value else ''}:{t.effect}"
-                    f"  ({len(hosts)} nodes)")
-        for t, hosts in taint_map.items()
-    ]
+    taint_by_label = {}
+    choices = []
+    for t, hosts in taint_map.items():
+        label = (f"{t.key}{('=' + t.value) if t.value else ''}:{t.effect}"
+                 f"  ({len(hosts)} nodes)")
+        taint_by_label[label] = t
+        choices.append(Choice(value=label, name=label))
     try:
         selected = inquirer.checkbox(
             message="Select taints to tolerate "
@@ -688,7 +695,7 @@ def prompt_for_taints(taint_map):
         ).execute()
     except KeyboardInterrupt as e:
         raise InteractiveCancelled("cancelled") from e
-    return set(selected)
+    return {taint_by_label[label] for label in selected}
 
 
 if __name__ == "__main__":
