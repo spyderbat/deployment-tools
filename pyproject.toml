@@ -1,3 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "customize-daemonset"
+version = "0.1.0"
+description = "Generate per-core-count Kubernetes DaemonSet variants from a base manifest and kubectl node data."
+requires-python = ">=3.10"
+dependencies = [
+    "ruamel.yaml>=0.18",
+    "InquirerPy>=0.3.4",
+]
+
+[project.scripts]
+customize-daemonset = "customize_daemonset:main"
+
+[tool.setuptools]
+py-modules = ["customize_daemonset"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

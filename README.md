@@ -7,10 +7,22 @@ see `docs/design.md` for the full spec.
 
 ## Install
 
+Recommended — install as a user-level CLI via `pipx`:
+
+```bash
+pipx install .
+```
+
+This makes `customize-daemonset` available from anywhere, isolated in its own
+virtualenv, with no shell activation required. If you don't have `pipx`,
+install it first (`apt install pipx`, `brew install pipx`, or
+`pip install --user pipx`).
+
+For development (running the test suite), set up a local venv instead:
+
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-chmod +x customize_daemonset.py
+.venv/bin/pip install -r requirements-dev.txt
 ```
 
 ## Usage
@@ -18,7 +30,7 @@ chmod +x customize_daemonset.py
 Non-interactive (recommended for CI):
 
 ```bash
-./customize_daemonset.py \
+customize-daemonset \
     --base deployment_file.yaml \
     --nodes <(kubectl get nodes -o yaml) \
     --out customized.yaml \
@@ -28,9 +40,13 @@ Non-interactive (recommended for CI):
 Interactive (TTY): omit `--base` / `--nodes` / `--tolerate` to be prompted.
 
 ```
-./customize_daemonset.py
+customize-daemonset
 # -> prompts for paths, then a checkbox of detected taints
 ```
+
+If you installed via the development venv (not pipx), substitute
+`.venv/bin/python customize_daemonset.py` for `customize-daemonset` in the
+commands above.
 
 ## How it works
 
