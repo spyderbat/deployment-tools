@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: Node
+  metadata: {name: node-a}
+  spec: {}
+  status:
+    capacity: {cpu: "8"}
+    conditions:
+    - {type: Ready, status: "True"}
+- apiVersion: v1
+  kind: Node
+  metadata: {name: node-b}
+  spec: {}
+  status:
+    capacity: {cpu: "8"}
+    conditions:
+    - {type: Ready, status: "True"}
+- apiVersion: v1
+  kind: Node
+  metadata: {name: node-c}
+  spec: {}
+  status:
+    capacity: {cpu: "8"}
+    conditions:
+    - {type: Ready, status: "True"}

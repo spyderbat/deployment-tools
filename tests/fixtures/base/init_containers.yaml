@@ -1,0 +1,11 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent
+spec:
+  selector: {matchLabels: {app: nano}}
+  template:
+    metadata: {labels: {app: nano}}
+    spec:
+      initContainers: [{name: i, image: busybox}]
+      containers: [{name: nano, image: nano:1}]

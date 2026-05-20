@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent
+spec:
+  selector:
+    matchLabels:
+      app: nanoagent
+  template:
+    metadata:
+      labels:
+        app: nanoagent
+    spec:
+      containers:
+      - name: nanoagent
+        image: spyderbat/nano:v1
