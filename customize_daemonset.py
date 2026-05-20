@@ -249,3 +249,25 @@ def extract_nodes(nodes_doc: dict):
         taints = _node_taints(item)
         nodes.append(NodeInfo(hostname=name, cores=cores, taints=taints))
     return nodes, skipped
+
+
+def distinct_taints(nodes):
+    """Map each distinct taint (by key+value+effect) to the sorted list of
+    hostnames carrying it."""
+    by_taint = {}
+    for n in nodes:
+        for t in n.taints:
+            by_taint.setdefault(t, []).append(n.hostname)
+    return {t: sorted(hosts) for t, hosts in by_taint.items()}
+
+
+def taint_matches_toleration(taint: Taint, tol: Toleration) -> bool:
+    if tol.key != taint.key:
+        return False
+    if tol.effect and tol.effect != taint.effect:
+        return False
+    if tol.operator == "Exists":
+        return True
+    if tol.operator == "Equal":
+        return tol.value == taint.value
+    return False
