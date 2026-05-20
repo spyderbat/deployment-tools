@@ -2,6 +2,7 @@
 """Generate per-core-count DaemonSet variants from a base manifest and a
 `kubectl get nodes -o yaml` file. See docs/design.md for the full spec."""
 
+import argparse
 import copy
 import pathlib
 import sys
@@ -506,3 +507,106 @@ def write_output(path, docs):
     with path.open("w") as f:
         for doc in docs:
             y.dump(doc, f)
+
+
+def build_argparser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="customize_daemonset",
+        description="Generate per-core-count DaemonSet variants.",
+    )
+    p.add_argument("--base", help="path to base manifest YAML")
+    p.add_argument("--nodes", help="path to `kubectl get nodes -o yaml` output")
+    p.add_argument("--out", help="output file path (default: stdout)")
+    p.add_argument("--cpu-request-per-core", default="50m",
+                   help="CPU quantity per core for requests (default: 50m)")
+    p.add_argument("--tolerate", action="append", default=[],
+                   metavar="KEY[=VALUE]:EFFECT",
+                   help="replace base manifest tolerations with these (repeatable)")
+    p.add_argument("--interactive", action="store_true",
+                   help="force interactive prompts for all inputs")
+    return p
+
+
+def _run(args, *, stdin_is_tty: bool) -> int:
+    if args.interactive or (stdin_is_tty and (not args.base or not args.nodes)):
+        # Interactive mode is wired in Task 14. For now, error if any
+        # required arg is missing.
+        prompt_for_missing_inputs(args, stdin_is_tty)
+    if not args.base:
+        raise InputValidationError("missing required argument: --base")
+    if not args.nodes:
+        raise InputValidationError("missing required argument: --nodes")
+
+    cpu_per_core_millis = parse_cpu_per_core_arg(args.cpu_request_per_core)
+    explicit_tolerations = [parse_tolerate_arg(s) for s in args.tolerate]
+
+    base_docs = load_yaml_docs(args.base)
+    nodes_doc = load_yaml_doc(args.nodes)
+
+    ds_doc, passthrough_docs = split_daemonset(base_docs)
+    base_tolerations = (((ds_doc.get("spec") or {}).get("template") or {})
+                        .get("spec") or {}).get("tolerations")
+
+    node_infos, skipped = extract_nodes(nodes_doc)
+    if skipped:
+        print(f"skipped {len(skipped)} nodes "
+              f"(unschedulable or NotReady): {', '.join(skipped)}",
+              file=sys.stderr)
+
+    final_tolerations, usable_nodes, excluded = resolve_tolerations(
+        nodes=node_infos,
+        explicit_tolerations=explicit_tolerations,
+        base_tolerations=base_tolerations,
+        is_tty=stdin_is_tty,
+        prompt_fn=prompt_for_taints if stdin_is_tty else None,
+    )
+    if excluded:
+        print(f"excluded {len(excluded)} nodes due to unmatched taints: "
+              f"{', '.join(excluded)}", file=sys.stderr)
+
+    groups = group_by_cores(usable_nodes)
+
+    variants = [
+        build_variant(
+            base=ds_doc,
+            cores=cores,
+            hostnames=hostnames,
+            cpu_per_core_millis=cpu_per_core_millis,
+            final_tolerations=final_tolerations,
+        )
+        for cores, hostnames in groups.items()
+    ]
+
+    write_output(args.out, passthrough_docs + variants)
+    return 0
+
+
+def main(argv=None) -> int:
+    args = build_argparser().parse_args(argv)
+    try:
+        return _run(args, stdin_is_tty=sys.stdin.isatty())
+    except InteractiveCancelled:
+        return 130
+    except CustomizerError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+
+# Stubs for interactive helpers; implemented in Task 14.
+def prompt_for_missing_inputs(args, is_tty):
+    if not args.base or not args.nodes:
+        missing = [n for n, v in
+                   [("--base", args.base), ("--nodes", args.nodes)] if not v]
+        raise InputValidationError(
+            f"missing required argument(s): {', '.join(missing)}"
+        )
+
+
+def prompt_for_taints(taint_map):
+    raise InputValidationError(
+        "interactive taint selection not yet implemented"
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
