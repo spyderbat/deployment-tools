@@ -4,6 +4,7 @@ from customize_daemonset import (
     InputValidationError,
     Toleration,
     parse_cpu_per_core_arg,
+    parse_node_cores,
     parse_tolerate_arg,
 )
 
@@ -46,3 +47,22 @@ def test_parse_tolerate_arg_exists():
 def test_parse_tolerate_arg_rejects(bad):
     with pytest.raises(InputValidationError):
         parse_tolerate_arg(bad)
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("8", 8),
+    ("16", 16),
+    ("8000m", 8),
+    ("16000m", 16),
+    ("8.0", 8),
+])
+def test_parse_node_cores_accepts(value, expected):
+    assert parse_node_cores(value) == expected
+
+
+@pytest.mark.parametrize("value", [
+    "7.5", "7500m", "0", "-1", "abc", "", None,
+])
+def test_parse_node_cores_rejects(value):
+    with pytest.raises(InputValidationError):
+        parse_node_cores(value)

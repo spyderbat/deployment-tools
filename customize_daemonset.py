@@ -110,6 +110,26 @@ def parse_cpu_per_core_arg(value: str) -> int:
     return parse_millicores(value)
 
 
+def parse_node_cores(value) -> int:
+    """Parse a node's `status.capacity.cpu` value into a positive integer core count.
+
+    Accepts forms like "8", "8000m", "8.0". Rejects fractional values
+    (e.g. "7.5", "7500m") and non-positive values.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InputValidationError(f"invalid node CPU capacity: {value!r}")
+    millis = parse_millicores(value)
+    if millis <= 0:
+        raise InputValidationError(
+            f"invalid node CPU capacity {value!r}: must be positive"
+        )
+    if millis % 1000 != 0:
+        raise InputValidationError(
+            f"invalid node CPU capacity {value!r}: not a whole number of cores"
+        )
+    return millis // 1000
+
+
 def parse_tolerate_arg(value: str) -> Toleration:
     """Parse a --tolerate flag value into a Toleration.
 
