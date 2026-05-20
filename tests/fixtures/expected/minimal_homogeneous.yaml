@@ -1,0 +1,35 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent-8core
+spec:
+  selector:
+    matchLabels:
+      app: nanoagent
+  template:
+    metadata:
+      labels:
+        app: nanoagent
+    spec:
+      containers:
+      - name: nanoagent
+        image: spyderbat/nano:v1
+        resources:
+          requests:
+            cpu: 400m
+            memory: 1104Mi
+          limits:
+            cpu: 2000m
+            memory: 2208Mi
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - node-a
+                - node-b
+                - node-c
