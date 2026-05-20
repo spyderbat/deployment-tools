@@ -355,3 +355,16 @@ def resolve_tolerations(
     final_dicts.extend(_toleration_to_dict(t) for t in new_tols)
     usable, excluded = _filter_nodes_by_tolerations(nodes, new_tols)
     return final_dicts, usable, excluded
+
+
+def group_by_cores(nodes):
+    """Return an ordered dict[int, list[str]] mapping cores -> sorted hostnames.
+    Keys are sorted ascending."""
+    if not nodes:
+        raise InputValidationError(
+            "no schedulable, ready nodes available for grouping"
+        )
+    buckets: dict = {}
+    for n in nodes:
+        buckets.setdefault(n.cores, []).append(n.hostname)
+    return {cores: sorted(hosts) for cores, hosts in sorted(buckets.items())}
