@@ -3,7 +3,13 @@
 `kubectl get nodes -o yaml` file. See docs/design.md for the full spec."""
 
 import copy
+import pathlib
+import sys
 from dataclasses import dataclass
+
+from ruamel.yaml import YAML
+from ruamel.yaml.parser import ParserError
+from ruamel.yaml.scanner import ScannerError
 
 
 class CustomizerError(Exception):
@@ -453,3 +459,50 @@ def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerati
         pod_spec["tolerations"] = list(final_tolerations)
 
     return v
+
+
+def _yaml():
+    y = YAML(typ="rt")  # round-trip
+    y.preserve_quotes = True
+    y.width = 4096
+    return y
+
+
+def load_yaml_docs(path) -> list:
+    path = pathlib.Path(path)
+    if not path.exists():
+        raise InputValidationError(f"base manifest not found: {path}")
+    try:
+        return list(_yaml().load_all(path.read_text()))
+    except (ParserError, ScannerError) as e:
+        raise InputValidationError(f"failed to parse {path}: {e}") from e
+
+
+def load_yaml_doc(path) -> dict:
+    path = pathlib.Path(path)
+    if not path.exists():
+        raise InputValidationError(f"nodes file not found: {path}")
+    try:
+        docs = list(_yaml().load_all(path.read_text()))
+    except (ParserError, ScannerError) as e:
+        raise InputValidationError(f"failed to parse {path}: {e}") from e
+    if len(docs) != 1:
+        raise InputValidationError(
+            f"{path}: expected a single YAML document, found {len(docs)} (multiple documents)"
+        )
+    return docs[0]
+
+
+def write_output(path, docs):
+    y = _yaml()
+    y.explicit_start = True
+    if path is None:
+        for doc in docs:
+            y.dump(doc, sys.stdout)
+        return
+    path = pathlib.Path(path)
+    if not path.parent.exists():
+        raise InputValidationError(f"output directory does not exist: {path.parent}")
+    with path.open("w") as f:
+        for doc in docs:
+            y.dump(doc, f)
