@@ -114,3 +114,64 @@ def test_cli_empty_nodes_errors(fixtures_dir, run_script):
     )
     assert r.returncode == 1
     assert "no schedulable" in r.stderr
+
+
+def test_cli_max_total_cpu_scales(fixtures_dir, run_script, tmp_path):
+    """CPU cap below the natural total triggers scaling and a stderr message."""
+    out = tmp_path / "out.yaml"
+    # 3 nodes × 8 cores × 50m = 1200m. Cap at 600m → f_cpu = 0.5.
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--max-total-cpu", "600m",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "scaled CPU per-core factor" in r.stderr
+    text = out.read_text()
+    # Scaled cpu request per pod: round(0.5 * 8 * 50) = 200m
+    assert "cpu: 200m" in text
+
+
+def test_cli_max_total_memory_scales(fixtures_dir, run_script, tmp_path):
+    """Memory cap below the natural scalable total triggers scaling."""
+    out = tmp_path / "out.yaml"
+    # 3 pods × 1024 Mi base = 3072 Mi base + 3×8×10 = 240 Mi scalable = 3312 Mi natural total
+    # Cap at 3192 Mi → f_mem = (3192-3072)/240 = 0.5
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--max-total-memory", "3192Mi",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "scaled memory per-core factor" in r.stderr
+    text = out.read_text()
+    # Per-pod mem request: 1024 + round(0.5 * 8 * 10) = 1064 Mi
+    assert "memory: 1064Mi" in text
+
+
+def test_cli_mem_cap_below_base_errors(fixtures_dir, run_script):
+    """Memory cap below the 1Gi-per-pod base must error clearly."""
+    # 3 pods × 1024 Mi base = 3072 Mi. Cap at 2Gi (=2048 Mi) → unsatisfiable.
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--max-total-memory", "2Gi",
+    )
+    assert r.returncode == 1
+    assert "below" in r.stderr
+    assert "per-pod base" in r.stderr
+
+
+def test_cli_caps_unset_no_change(fixtures_dir, run_script, tmp_path):
+    """Without --max-total-* flags, output is identical to the existing golden."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--out", str(out),
+    )
+    assert r.returncode == 0
+    expected = (fixtures_dir / "expected/minimal_homogeneous.yaml").read_text()
+    assert out.read_text() == expected

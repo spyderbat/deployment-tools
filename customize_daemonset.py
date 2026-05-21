@@ -51,6 +51,55 @@ class NodeInfo:
     taints: tuple  # tuple[Taint, ...]
 
 
+_MEM_SUFFIXES = {
+    "Ki": 1 / 1024,            # 1 KiB = 1/1024 Mi
+    "Mi": 1,
+    "Gi": 1024,
+    "Ti": 1024 * 1024,
+    "Pi": 1024 * 1024 * 1024,
+    "K":  1000 / (1024 * 1024),
+    "M":  1000 * 1000 / (1024 * 1024),
+    "G":  1000 * 1000 * 1000 / (1024 * 1024),
+    "T":  1000 * 1000 * 1000 * 1000 / (1024 * 1024),
+}
+
+
+def parse_memory_mi(value) -> int:
+    """Parse a Kubernetes memory quantity string into an integer number of Mi.
+
+    Accepts: bare integer (bytes), or value with suffix Ki/Mi/Gi/Ti/Pi (binary)
+    or K/M/G/T (decimal). Rejects negatives, empty strings, fractional values
+    (e.g. "1.5Gi"), and unknown suffixes.
+
+    Bare bytes are converted to Mi via integer division (1024 bytes -> 0 Mi).
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InputValidationError(f"invalid memory quantity: {value!r}")
+    s = value.strip()
+    # Try two-letter suffixes first (Ki, Mi, etc.) before one-letter (K, M, ...)
+    for suffix in sorted(_MEM_SUFFIXES.keys(), key=len, reverse=True):
+        if s.endswith(suffix):
+            body = s[:-len(suffix)]
+            try:
+                n = int(body)
+            except ValueError:
+                raise InputValidationError(
+                    f"invalid memory quantity {value!r}: integer body required before {suffix!r}"
+                )
+            if n < 0:
+                raise InputValidationError(
+                    f"invalid memory quantity {value!r}: negative")
+            return int(n * _MEM_SUFFIXES[suffix])
+    # Bare integer (bytes)
+    try:
+        n = int(s)
+    except ValueError:
+        raise InputValidationError(f"invalid memory quantity: {value!r}")
+    if n < 0:
+        raise InputValidationError(f"invalid memory quantity {value!r}: negative")
+    return n // (1024 * 1024)
+
+
 def parse_millicores(value: str) -> int:
     """Parse a Kubernetes CPU quantity string into an integer number of millicores.
 
@@ -94,20 +143,22 @@ def format_memory_mi(mi: int) -> str:
     return f"{mi}Mi"
 
 
-def compute_resources(*, cores: int, cpu_per_core_millis: int) -> dict:
+def compute_resources(*, cores: int, cpu_per_core_millis: int,
+                      cpu_scale: float = 1.0,
+                      mem_per_core_scale: float = 1.0) -> dict:
     """Compute resources.requests and resources.limits for a node group.
 
-    Formula (from docs/design.md §4.2):
-        cpu_request_millis = cores * cpu_per_core_millis
+    Formula (from docs/design.md §4.2 with optional cluster-cap scaling):
+        cpu_request_millis = round(cpu_scale * cores * cpu_per_core_millis)
         cpu_limit_millis   = max(2000, cpu_request_millis)
-        mem_request_mi     = 1024 + (cores * 10)
+        mem_request_mi     = 1024 + round(mem_per_core_scale * cores * 10)
         mem_limit_mi       = mem_request_mi * 2
     """
     if cores <= 0:
         raise InputValidationError(f"cores must be positive, got {cores}")
-    cpu_request_millis = cores * cpu_per_core_millis
+    cpu_request_millis = round(cpu_scale * cores * cpu_per_core_millis)
     cpu_limit_millis = max(2000, cpu_request_millis)
-    mem_request_mi = 1024 + (cores * 10)
+    mem_request_mi = 1024 + round(mem_per_core_scale * cores * 10)
     mem_limit_mi = mem_request_mi * 2
     return {
         "requests": {
@@ -119,6 +170,51 @@ def compute_resources(*, cores: int, cpu_per_core_millis: int) -> dict:
             "memory": format_memory_mi(mem_limit_mi),
         },
     }
+
+
+def compute_scale_factors(*, groups, cpu_per_core_millis,
+                          max_total_cpu_millis, max_total_mem_mi):
+    """Determine CPU and memory scale factors needed to fit cluster caps.
+
+    Args:
+        groups: dict[int, list[str]] mapping cores -> hostnames.
+        cpu_per_core_millis: int millicores per core (from --cpu-request-per-core).
+        max_total_cpu_millis: int total CPU request cap in millicores, or None.
+        max_total_mem_mi: int total memory request cap in Mi, or None.
+
+    Returns:
+        (cpu_scale: float, mem_per_core_scale: float) — each in (0, 1].
+
+    Raises:
+        InputValidationError if the memory cap is below the per-pod base floor.
+    """
+    total_cpu_at_1 = sum(cores * cpu_per_core_millis * len(hosts)
+                         for cores, hosts in groups.items())
+    base_mem_total = sum(1024 * len(hosts) for cores, hosts in groups.items())
+    scalable_mem_total = sum(cores * 10 * len(hosts)
+                             for cores, hosts in groups.items())
+
+    if max_total_cpu_millis is not None and total_cpu_at_1 > max_total_cpu_millis:
+        f_cpu = max_total_cpu_millis / total_cpu_at_1
+    else:
+        f_cpu = 1.0
+
+    if max_total_mem_mi is not None:
+        if base_mem_total > max_total_mem_mi:
+            total_pods = sum(len(hosts) for hosts in groups.values())
+            raise InputValidationError(
+                f"memory cap of {max_total_mem_mi}Mi is below the "
+                f"{base_mem_total}Mi required for the per-pod base "
+                f"(1Gi/pod × {total_pods} pods)"
+            )
+        if (base_mem_total + scalable_mem_total) > max_total_mem_mi:
+            f_mem = (max_total_mem_mi - base_mem_total) / scalable_mem_total
+        else:
+            f_mem = 1.0
+    else:
+        f_mem = 1.0
+
+    return f_cpu, f_mem
 
 
 def parse_cpu_per_core_arg(value: str) -> int:
@@ -423,7 +519,9 @@ def split_daemonset(docs):
     return ds, passthrough
 
 
-def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerations):
+def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerations,
+                  cpu_scale: float = 1.0,
+                  mem_per_core_scale: float = 1.0):
     """Build a single DaemonSet variant from the base DS.
 
     `final_tolerations` is either a list of dicts to apply (replacing any
@@ -436,7 +534,8 @@ def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerati
 
     container = v["spec"]["template"]["spec"]["containers"][0]
     container["resources"] = compute_resources(
-        cores=cores, cpu_per_core_millis=cpu_per_core_millis
+        cores=cores, cpu_per_core_millis=cpu_per_core_millis,
+        cpu_scale=cpu_scale, mem_per_core_scale=mem_per_core_scale,
     )
 
     pod_spec = v["spec"]["template"]["spec"]
@@ -559,6 +658,12 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="replace base manifest tolerations with these (repeatable)")
     p.add_argument("--interactive", action="store_true",
                    help="force interactive prompts for all inputs")
+    p.add_argument("--max-total-cpu", default=None,
+                   help="Cap on total cluster CPU requests (e.g., '100', '50000m'). "
+                        "If totals exceed this, CPU per-core scale is reduced uniformly.")
+    p.add_argument("--max-total-memory", default=None,
+                   help="Cap on total cluster memory requests (e.g., '200Gi'). "
+                        "If totals exceed this, the memory per-core term is reduced uniformly.")
     return p
 
 
@@ -601,6 +706,41 @@ def _run(args, *, stdin_is_tty: bool) -> int:
 
     groups = group_by_cores(usable_nodes)
 
+    max_total_cpu_millis = (parse_millicores(args.max_total_cpu)
+                            if args.max_total_cpu else None)
+    max_total_mem_mi = (parse_memory_mi(args.max_total_memory)
+                        if args.max_total_memory else None)
+
+    f_cpu, f_mem = compute_scale_factors(
+        groups=groups,
+        cpu_per_core_millis=cpu_per_core_millis,
+        max_total_cpu_millis=max_total_cpu_millis,
+        max_total_mem_mi=max_total_mem_mi,
+    )
+
+    if f_cpu < 1.0:
+        total_cpu = sum(c * cpu_per_core_millis * len(h)
+                        for c, h in groups.items())
+        scaled_per_core = round(f_cpu * cpu_per_core_millis)
+        print(
+            f"scaled CPU per-core factor: {cpu_per_core_millis}m × {f_cpu:.4f} "
+            f"→ {scaled_per_core}m (total would have been {total_cpu/1000:.1f} CPUs; "
+            f"cap {max_total_cpu_millis/1000:.1f} CPUs)",
+            file=sys.stderr,
+        )
+
+    if f_mem < 1.0:
+        scalable_total = sum(c * 10 * len(h) for c, h in groups.items())
+        scaled_per_core = round(f_mem * 10)
+        base_total = sum(1024 * len(h) for c, h in groups.items())
+        total_at_1 = base_total + scalable_total
+        print(
+            f"scaled memory per-core factor: 10Mi × {f_mem:.4f} "
+            f"→ {scaled_per_core}Mi (total would have been "
+            f"{total_at_1/1024:.2f}Gi; cap {max_total_mem_mi/1024:.2f}Gi)",
+            file=sys.stderr,
+        )
+
     variants = [
         build_variant(
             base=ds_doc,
@@ -608,6 +748,8 @@ def _run(args, *, stdin_is_tty: bool) -> int:
             hostnames=hostnames,
             cpu_per_core_millis=cpu_per_core_millis,
             final_tolerations=final_tolerations,
+            cpu_scale=f_cpu,
+            mem_per_core_scale=f_mem,
         )
         for cores, hostnames in groups.items()
     ]

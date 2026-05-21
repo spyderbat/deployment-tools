@@ -72,6 +72,18 @@ mem_request_Mi     = 1024 + (cores * 10)
 mem_limit_Mi       = mem_request_Mi * 2
 ```
 
+### Cluster resource caps (optional)
+
+`--max-total-cpu` and `--max-total-memory` cap the total cluster request:
+
+- `--max-total-cpu 100` — total `cpu.requests` across all pods cannot exceed 100 CPUs
+- `--max-total-memory 200Gi` — total `memory.requests` across all pods cannot exceed 200 GiB
+
+If the natural total exceeds either cap, the per-core scaling factor for that
+dimension is reduced uniformly across all variants. The 1Gi-per-pod memory
+base is never scaled — if the cap is below the cumulative base, the tool
+errors out.
+
 ## Tests
 
 ```bash
