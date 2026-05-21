@@ -92,7 +92,9 @@ def test_cli_taints_with_explicit_tolerate(fixtures_dir, run_script, tmp_path):
     assert "spyderbat-nanoagent-8core" in text
 
 
-def test_cli_unschedulable_skipped(fixtures_dir, run_script, tmp_path):
+def test_cli_cordoned_kept_notready_skipped(fixtures_dir, run_script, tmp_path):
+    """NotReady nodes are skipped; cordoned nodes are kept (DaemonSet pods
+    schedule on cordoned nodes by default)."""
     out = tmp_path / "out.yaml"
     r = run_script(
         "--base", str(fixtures_dir / "base/minimal.yaml"),
@@ -100,10 +102,12 @@ def test_cli_unschedulable_skipped(fixtures_dir, run_script, tmp_path):
         "--out", str(out),
     )
     assert r.returncode == 0, r.stderr
-    assert "skipped 2 nodes" in r.stderr
+    assert "skipped 1 nodes" in r.stderr
+    assert "(NotReady)" in r.stderr
+    assert "notready-1" in r.stderr
     text = out.read_text()
     assert "healthy-1" in text
-    assert "cordoned-1" not in text
+    assert "cordoned-1" in text    # now included
     assert "notready-1" not in text
 
 

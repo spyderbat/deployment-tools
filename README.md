@@ -69,8 +69,10 @@ commands above.
    **exactly one container** and **no initContainers**. All other documents
    (ServiceAccounts, ClusterRoles, Deployments, etc.) are passed through
    unchanged.
-2. Reads `kubectl get nodes -o yaml`, filters out unschedulable and NotReady
-   nodes, and groups remaining nodes by integer CPU core count.
+2. Reads `kubectl get nodes -o yaml`, filters out NotReady nodes, and groups
+   remaining nodes by integer CPU core count. Cordoned nodes
+   (`spec.unschedulable: true`) are kept — DaemonSet pods schedule on cordoned
+   nodes by default in Kubernetes.
 3. For each group, emits one DaemonSet variant with:
    - Name suffix `-{cores}core`
    - `containers[0].resources` scaled to the group's core count

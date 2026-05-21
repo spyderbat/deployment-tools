@@ -39,14 +39,16 @@ def test_extract_nodes_basic():
     assert skipped == []
 
 
-def test_extract_nodes_skips_unschedulable():
+def test_extract_nodes_keeps_cordoned():
+    """Cordoned nodes (`spec.unschedulable: true`) are kept — DaemonSet pods
+    schedule on cordoned nodes by default in Kubernetes."""
     doc = _list_doc(
         _node("a", "8"),
         _node("b", "8", unschedulable=True),
     )
     nodes, skipped = extract_nodes(doc)
-    assert [n.hostname for n in nodes] == ["a"]
-    assert skipped == ["b"]
+    assert {n.hostname for n in nodes} == {"a", "b"}
+    assert skipped == []
 
 
 def test_extract_nodes_skips_notready():

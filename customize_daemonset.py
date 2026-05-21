@@ -311,7 +311,9 @@ def _node_taints(node: dict) -> tuple:
 def extract_nodes(nodes_doc: dict):
     """Parse a kubectl-get-nodes-o-yaml doc into NodeInfo list, plus skipped names.
 
-    Filters out nodes where `spec.unschedulable` is true or `Ready` is not True.
+    Filters out nodes where the `Ready` condition is not True. Cordoned nodes
+    (`spec.unschedulable: true`) are intentionally kept — DaemonSet pods
+    schedule on cordoned nodes by default in Kubernetes (since 1.12).
     Returns (nodes, skipped_hostnames).
     """
     if not isinstance(nodes_doc, dict):
@@ -341,9 +343,6 @@ def extract_nodes(nodes_doc: dict):
             raise InputValidationError(
                 f"node {name!r}: missing status.capacity.cpu"
             )
-        if (item.get("spec") or {}).get("unschedulable") is True:
-            skipped.append(name)
-            continue
         if not _node_is_ready(item):
             skipped.append(name)
             continue
@@ -714,7 +713,7 @@ def _run(args, *, stdin_is_tty: bool) -> int:
     node_infos, skipped = extract_nodes(nodes_doc)
     if skipped:
         print(f"skipped {len(skipped)} nodes "
-              f"(unschedulable or NotReady): {', '.join(skipped)}",
+              f"(NotReady): {', '.join(skipped)}",
               file=sys.stderr)
 
     final_tolerations, usable_nodes, excluded = resolve_tolerations(
