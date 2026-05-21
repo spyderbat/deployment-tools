@@ -66,3 +66,72 @@ def test_no_tolerate_taints_non_tty_errors():
         )
     assert "tainted nodes detected" in str(exc_info.value)
     assert "control-plane" in str(exc_info.value)
+
+
+def test_tolerate_all_with_taints_no_base():
+    cp = Taint("control-plane", "", "NoSchedule")
+    gpu = Taint("dedicated", "gpu", "NoSchedule")
+    final, usable, excluded = resolve_tolerations(
+        nodes=[_n("a", cp), _n("b", cp, gpu), _n("c")],
+        explicit_tolerations=[],
+        base_tolerations=None,
+        is_tty=False,
+        tolerate_all=True,
+    )
+    # All nodes usable (every taint is tolerated).
+    assert {n.hostname for n in usable} == {"a", "b", "c"}
+    assert excluded == []
+    # Final list contains both taints as tolerations (order may vary by dict iteration).
+    assert {(t["key"], t.get("value", ""), t.get("effect", ""))
+            for t in final} == {
+        ("control-plane", "", "NoSchedule"),
+        ("dedicated", "gpu", "NoSchedule"),
+    }
+
+
+def test_tolerate_all_appends_to_base():
+    cp = Taint("control-plane", "", "NoSchedule")
+    base = [{"key": "stale", "operator": "Exists", "effect": "NoSchedule"}]
+    final, usable, excluded = resolve_tolerations(
+        nodes=[_n("a", cp), _n("b")],
+        explicit_tolerations=[],
+        base_tolerations=base,
+        is_tty=False,
+        tolerate_all=True,
+    )
+    assert {n.hostname for n in usable} == {"a", "b"}
+    # Base first, then synthesized.
+    assert final[0] == {"key": "stale", "operator": "Exists", "effect": "NoSchedule"}
+    assert len(final) == 2  # base + one synthesized
+    assert final[1]["key"] == "control-plane"
+
+
+def test_tolerate_all_no_taints_keeps_base():
+    base = [{"key": "x", "operator": "Exists", "effect": "NoSchedule"}]
+    final, usable, excluded = resolve_tolerations(
+        nodes=[_n("a"), _n("b")],
+        explicit_tolerations=[],
+        base_tolerations=base,
+        is_tty=False,
+        tolerate_all=True,
+    )
+    # Same as the no-taints path: tolerate_all is a no-op when there's nothing to tolerate.
+    assert final == base
+    assert {n.hostname for n in usable} == {"a", "b"}
+    assert excluded == []
+
+
+def test_tolerate_all_non_tty_no_error():
+    """tolerate_all must work in non-TTY mode (where the interactive prompt
+    would have errored out)."""
+    cp = Taint("control-plane", "", "NoSchedule")
+    final, usable, excluded = resolve_tolerations(
+        nodes=[_n("a", cp)],
+        explicit_tolerations=[],
+        base_tolerations=None,
+        is_tty=False,
+        tolerate_all=True,
+    )
+    assert len(usable) == 1
+    assert excluded == []
+    assert len(final) == 1

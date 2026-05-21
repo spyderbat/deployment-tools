@@ -175,3 +175,48 @@ def test_cli_caps_unset_no_change(fixtures_dir, run_script, tmp_path):
     assert r.returncode == 0
     expected = (fixtures_dir / "expected/minimal_homogeneous.yaml").read_text()
     assert out.read_text() == expected
+
+
+def test_cli_tolerate_all_with_taints(fixtures_dir, run_script, tmp_path):
+    """--tolerate-all auto-tolerates everything; no node should be excluded."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/with_taints.yaml"),
+        "--tolerate-all",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    text = out.read_text()
+    # cp-1 has 4 cores; worker-1/2 have 8 cores
+    assert "spyderbat-nanoagent-4core" in text
+    assert "spyderbat-nanoagent-8core" in text
+    # The control-plane taint should appear as a toleration in every variant
+    assert "node-role.kubernetes.io/control-plane" in text
+
+
+def test_cli_tolerate_all_no_taints(fixtures_dir, run_script, tmp_path):
+    """--tolerate-all is a no-op when no taints are present."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--tolerate-all",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    # Output should be identical to the golden for this fixture
+    expected = (fixtures_dir / "expected/minimal_homogeneous.yaml").read_text()
+    assert out.read_text() == expected
+
+
+def test_cli_tolerate_and_tolerate_all_are_mutually_exclusive(fixtures_dir, run_script):
+    """Passing both --tolerate and --tolerate-all is a usage error (exit code 2)."""
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/with_taints.yaml"),
+        "--tolerate", "foo:NoSchedule",
+        "--tolerate-all",
+    )
+    assert r.returncode == 2
+    assert "not allowed" in r.stderr.lower() or "argument" in r.stderr.lower()

@@ -37,6 +37,21 @@ customize-daemonset \
     --tolerate node-role.kubernetes.io/control-plane:NoSchedule
 ```
 
+For non-interactive runs where you don't care which taints are present (e.g.
+"just tolerate everything the cluster has"), use `--tolerate-all`:
+
+```bash
+customize-daemonset \
+    --base deployment_file.yaml \
+    --nodes <(kubectl get nodes -o yaml) \
+    --out customized.yaml \
+    --tolerate-all
+```
+
+`--tolerate-all` augments the base manifest's existing tolerations with one
+for every taint detected, and works in both interactive and non-interactive
+mode. It is mutually exclusive with `--tolerate`.
+
 Interactive (TTY): omit `--base` / `--nodes` / `--tolerate` to be prompted.
 
 ```

@@ -407,6 +407,7 @@ def resolve_tolerations(
     explicit_tolerations,
     base_tolerations,
     is_tty: bool,
+    tolerate_all: bool = False,
     prompt_fn=None,
 ):
     """Determine final tolerations and usable nodes per §4.4 of the spec.
@@ -417,6 +418,8 @@ def resolve_tolerations(
         base_tolerations: list[dict] from the base manifest's
             spec.template.spec.tolerations, or None.
         is_tty: whether stdin is a TTY (controls interactive prompt path).
+        tolerate_all: if True, auto-tolerate every distinct taint detected,
+            appending to base tolerations; works in both TTY and non-TTY mode.
         prompt_fn: callable(distinct_taints_dict) -> set[Taint] selected.
             Used only on the no-explicit + has-taints + TTY path.
 
@@ -436,6 +439,19 @@ def resolve_tolerations(
                 list(nodes), [])
 
     # Taints exist but no explicit --tolerate.
+    if tolerate_all:
+        new_tols = [
+            Toleration(key=t.key,
+                       operator="Equal" if t.value else "Exists",
+                       value=t.value,
+                       effect=t.effect)
+            for t in taint_map
+        ]
+        final_dicts = list(base_tolerations) if base_tolerations else []
+        final_dicts.extend(_toleration_to_dict(t) for t in new_tols)
+        usable, excluded = _filter_nodes_by_tolerations(nodes, new_tols)
+        return final_dicts, usable, excluded
+
     if not is_tty:
         taint_summary = ", ".join(
             f"{t.key}{('=' + t.value) if t.value else ''}:{t.effect} ({len(hosts)} nodes)"
@@ -653,9 +669,17 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="output file path (default: stdout)")
     p.add_argument("--cpu-request-per-core", default="50m",
                    help="CPU quantity per core for requests (default: 50m)")
-    p.add_argument("--tolerate", action="append", default=[],
-                   metavar="KEY[=VALUE]:EFFECT",
-                   help="replace base manifest tolerations with these (repeatable)")
+    tolerate_group = p.add_mutually_exclusive_group()
+    tolerate_group.add_argument(
+        "--tolerate", action="append", default=[],
+        metavar="KEY[=VALUE]:EFFECT",
+        help="replace base manifest tolerations with these (repeatable)",
+    )
+    tolerate_group.add_argument(
+        "--tolerate-all", action="store_true",
+        help="auto-tolerate every distinct taint detected on input nodes "
+             "(augments base manifest tolerations; works in non-interactive mode)",
+    )
     p.add_argument("--interactive", action="store_true",
                    help="force interactive prompts for all inputs")
     p.add_argument("--max-total-cpu", default=None,
@@ -698,6 +722,7 @@ def _run(args, *, stdin_is_tty: bool) -> int:
         explicit_tolerations=explicit_tolerations,
         base_tolerations=base_tolerations,
         is_tty=stdin_is_tty,
+        tolerate_all=args.tolerate_all,
         prompt_fn=prompt_for_taints if stdin_is_tty else None,
     )
     if excluded:
