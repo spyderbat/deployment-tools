@@ -6,6 +6,7 @@ import argparse
 import copy
 import pathlib
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 
@@ -285,14 +286,6 @@ def parse_tolerate_arg(value: str) -> Toleration:
     )
 
 
-def _node_is_ready(node: dict) -> bool:
-    conditions = (node.get("status") or {}).get("conditions") or []
-    for c in conditions:
-        if c.get("type") == "Ready":
-            return c.get("status") == "True"
-    return False
-
-
 def _node_taints(node: dict) -> tuple:
     raw = (node.get("spec") or {}).get("taints") or []
     out = []
@@ -308,13 +301,12 @@ def _node_taints(node: dict) -> tuple:
     return tuple(out)
 
 
-def extract_nodes(nodes_doc: dict):
-    """Parse a kubectl-get-nodes-o-yaml doc into NodeInfo list, plus skipped names.
+def extract_nodes(nodes_doc: dict) -> list:
+    """Parse a kubectl-get-nodes-o-yaml doc into a list of NodeInfo.
 
-    Filters out nodes where the `Ready` condition is not True. Cordoned nodes
-    (`spec.unschedulable: true`) are intentionally kept — DaemonSet pods
-    schedule on cordoned nodes by default in Kubernetes (since 1.12).
-    Returns (nodes, skipped_hostnames).
+    No soft filtering — every node in the input is returned. Hard errors are
+    still raised for malformed nodes (missing name, missing/unparseable
+    capacity, malformed taint).
     """
     if not isinstance(nodes_doc, dict):
         raise InputValidationError("nodes file root is not a YAML mapping")
@@ -330,7 +322,6 @@ def extract_nodes(nodes_doc: dict):
         raise InputValidationError("nodes file 'items' is not a list")
 
     nodes = []
-    skipped = []
     for idx, item in enumerate(items):
         meta = item.get("metadata") or {}
         name = meta.get("name")
@@ -343,16 +334,13 @@ def extract_nodes(nodes_doc: dict):
             raise InputValidationError(
                 f"node {name!r}: missing status.capacity.cpu"
             )
-        if not _node_is_ready(item):
-            skipped.append(name)
-            continue
         try:
             cores = parse_node_cores(capacity)
         except InputValidationError as e:
             raise InputValidationError(f"node {name!r}: {e}") from e
         taints = _node_taints(item)
         nodes.append(NodeInfo(hostname=name, cores=cores, taints=taints))
-    return nodes, skipped
+    return nodes
 
 
 def distinct_taints(nodes):
@@ -663,24 +651,27 @@ def build_argparser() -> argparse.ArgumentParser:
         prog="customize_daemonset",
         description="Generate per-core-count DaemonSet variants.",
     )
-    p.add_argument("--base", help="path to base manifest YAML")
-    p.add_argument("--nodes", help="path to `kubectl get nodes -o yaml` output")
-    p.add_argument("--out", help="output file path (default: stdout)")
+    p.add_argument("-b", "--base", help="path to base manifest YAML")
+    p.add_argument("-n", "--nodes", help="path to `kubectl get nodes -o yaml` output")
+    p.add_argument("-o", "--out", help="output file path (default: stdout)")
     p.add_argument("--cpu-request-per-core", default="50m",
                    help="CPU quantity per core for requests (default: 50m)")
     tolerate_group = p.add_mutually_exclusive_group()
     tolerate_group.add_argument(
-        "--tolerate", action="append", default=[],
+        "-t", "--tolerate", action="append", default=[],
         metavar="KEY[=VALUE]:EFFECT",
         help="replace base manifest tolerations with these (repeatable)",
     )
     tolerate_group.add_argument(
-        "--tolerate-all", action="store_true",
+        "-T", "--tolerate-all", action="store_true",
         help="auto-tolerate every distinct taint detected on input nodes "
              "(augments base manifest tolerations; works in non-interactive mode)",
     )
-    p.add_argument("--interactive", action="store_true",
+    p.add_argument("-i", "--interactive", action="store_true",
                    help="force interactive prompts for all inputs")
+    p.add_argument("-p", "--print-cli", action="store_true",
+                   help="After resolving interactive prompts, print the equivalent "
+                        "non-interactive command to stdout and exit (no output file).")
     p.add_argument("--max-total-cpu", default=None,
                    help="Cap on total cluster CPU requests (e.g., '100', '50000m'). "
                         "If totals exceed this, CPU per-core scale is reduced uniformly.")
@@ -688,6 +679,54 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="Cap on total cluster memory requests (e.g., '200Gi'). "
                         "If totals exceed this, the memory per-core term is reduced uniformly.")
     return p
+
+
+def format_cli_command(args, *, final_tolerations_from_prompt=None,
+                       all_taints_selected=False):
+    """Render the equivalent non-interactive CLI command, multi-line, shell-escaped.
+
+    Args:
+        args: the argparse.Namespace (possibly with interactive values filled in).
+        final_tolerations_from_prompt: list of Toleration objects synthesized from
+            an interactive checkbox selection (None if no interactive taint prompt
+            was run).
+        all_taints_selected: True if the user selected every detected taint in
+            the interactive prompt; the command can then use --tolerate-all
+            instead of enumerating each toleration.
+    """
+    parts = ["customize-daemonset"]
+    if args.base:
+        parts.append(f"--base {shlex.quote(args.base)}")
+    if args.nodes:
+        parts.append(f"--nodes {shlex.quote(args.nodes)}")
+    if args.out:
+        parts.append(f"--out {shlex.quote(args.out)}")
+    if args.cpu_request_per_core != "50m":
+        parts.append(f"--cpu-request-per-core {shlex.quote(args.cpu_request_per_core)}")
+    if args.max_total_cpu:
+        parts.append(f"--max-total-cpu {shlex.quote(args.max_total_cpu)}")
+    if args.max_total_memory:
+        parts.append(f"--max-total-memory {shlex.quote(args.max_total_memory)}")
+
+    if args.tolerate:
+        # User passed --tolerate flags explicitly; preserve them verbatim.
+        for t in args.tolerate:
+            parts.append(f"--tolerate {shlex.quote(t)}")
+    elif args.tolerate_all:
+        parts.append("--tolerate-all")
+    elif final_tolerations_from_prompt:
+        if all_taints_selected:
+            parts.append("--tolerate-all")
+        else:
+            for tol in final_tolerations_from_prompt:
+                if tol.operator == "Equal":
+                    spec = f"{tol.key}={tol.value}:{tol.effect}"
+                else:  # Exists
+                    spec = f"{tol.key}:{tol.effect}"
+                parts.append(f"--tolerate {shlex.quote(spec)}")
+    # else: no tolerations to add
+
+    return " \\\n    ".join(parts)
 
 
 def _run(args, *, stdin_is_tty: bool) -> int:
@@ -710,11 +749,15 @@ def _run(args, *, stdin_is_tty: bool) -> int:
     base_tolerations = (((ds_doc.get("spec") or {}).get("template") or {})
                         .get("spec") or {}).get("tolerations")
 
-    node_infos, skipped = extract_nodes(nodes_doc)
-    if skipped:
-        print(f"skipped {len(skipped)} nodes "
-              f"(NotReady): {', '.join(skipped)}",
-              file=sys.stderr)
+    node_infos = extract_nodes(nodes_doc)
+
+    prompt_result = {"selected": None, "all_taints": None}
+
+    def _recording_prompt(taint_map):
+        selection = prompt_for_taints(taint_map)
+        prompt_result["selected"] = selection
+        prompt_result["all_taints"] = set(taint_map.keys())
+        return selection
 
     final_tolerations, usable_nodes, excluded = resolve_tolerations(
         nodes=node_infos,
@@ -722,8 +765,30 @@ def _run(args, *, stdin_is_tty: bool) -> int:
         base_tolerations=base_tolerations,
         is_tty=stdin_is_tty,
         tolerate_all=args.tolerate_all,
-        prompt_fn=prompt_for_taints if stdin_is_tty else None,
+        prompt_fn=_recording_prompt if stdin_is_tty else None,
     )
+
+    if args.print_cli:
+        selected = prompt_result["selected"]
+        all_taints = prompt_result["all_taints"]
+        final_from_prompt = None
+        all_selected = False
+        if selected is not None:
+            # Synthesize Toleration objects matching what the interactive path produced
+            final_from_prompt = [
+                Toleration(key=t.key,
+                           operator="Equal" if t.value else "Exists",
+                           value=t.value,
+                           effect=t.effect)
+                for t in selected
+            ]
+            all_selected = (selected == all_taints)
+        print(format_cli_command(
+            args,
+            final_tolerations_from_prompt=final_from_prompt,
+            all_taints_selected=all_selected,
+        ))
+        return 0
     if excluded:
         print(f"excluded {len(excluded)} nodes due to unmatched taints: "
               f"{', '.join(excluded)}", file=sys.stderr)

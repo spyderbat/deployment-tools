@@ -32,11 +32,10 @@ def _list_doc(*nodes):
 
 def test_extract_nodes_basic():
     doc = _list_doc(_node("a", "8"), _node("b", "16"))
-    nodes, skipped = extract_nodes(doc)
+    nodes = extract_nodes(doc)  # no skipped any more
     assert len(nodes) == 2
     assert nodes[0].hostname == "a" and nodes[0].cores == 8
     assert nodes[1].hostname == "b" and nodes[1].cores == 16
-    assert skipped == []
 
 
 def test_extract_nodes_keeps_cordoned():
@@ -46,23 +45,22 @@ def test_extract_nodes_keeps_cordoned():
         _node("a", "8"),
         _node("b", "8", unschedulable=True),
     )
-    nodes, skipped = extract_nodes(doc)
+    nodes = extract_nodes(doc)
     assert {n.hostname for n in nodes} == {"a", "b"}
-    assert skipped == []
 
 
-def test_extract_nodes_skips_notready():
+def test_extract_nodes_keeps_notready():
+    """NotReady nodes are kept — no soft filtering remains."""
     doc = _list_doc(_node("a", "8"), _node("b", "8", ready=False))
-    nodes, skipped = extract_nodes(doc)
-    assert [n.hostname for n in nodes] == ["a"]
-    assert skipped == ["b"]
+    nodes = extract_nodes(doc)
+    assert {n.hostname for n in nodes} == {"a", "b"}
 
 
 def test_extract_nodes_extracts_taints():
     taint = {"key": "node-role.kubernetes.io/control-plane",
              "effect": "NoSchedule"}
     doc = _list_doc(_node("a", "8", taints=[taint]))
-    nodes, _ = extract_nodes(doc)
+    nodes = extract_nodes(doc)
     assert nodes[0].taints == (
         Taint(key="node-role.kubernetes.io/control-plane",
               value="", effect="NoSchedule"),

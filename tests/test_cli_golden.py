@@ -92,9 +92,8 @@ def test_cli_taints_with_explicit_tolerate(fixtures_dir, run_script, tmp_path):
     assert "spyderbat-nanoagent-8core" in text
 
 
-def test_cli_cordoned_kept_notready_skipped(fixtures_dir, run_script, tmp_path):
-    """NotReady nodes are skipped; cordoned nodes are kept (DaemonSet pods
-    schedule on cordoned nodes by default)."""
+def test_cli_all_nodes_included_regardless_of_state(fixtures_dir, run_script, tmp_path):
+    """All nodes are included regardless of cordoned/NotReady state."""
     out = tmp_path / "out.yaml"
     r = run_script(
         "--base", str(fixtures_dir / "base/minimal.yaml"),
@@ -102,13 +101,10 @@ def test_cli_cordoned_kept_notready_skipped(fixtures_dir, run_script, tmp_path):
         "--out", str(out),
     )
     assert r.returncode == 0, r.stderr
-    assert "skipped 1 nodes" in r.stderr
-    assert "(NotReady)" in r.stderr
-    assert "notready-1" in r.stderr
     text = out.read_text()
     assert "healthy-1" in text
-    assert "cordoned-1" in text    # now included
-    assert "notready-1" not in text
+    assert "cordoned-1" in text
+    assert "notready-1" in text
 
 
 def test_cli_empty_nodes_errors(fixtures_dir, run_script):
@@ -224,3 +220,71 @@ def test_cli_tolerate_and_tolerate_all_are_mutually_exclusive(fixtures_dir, run_
     )
     assert r.returncode == 2
     assert "not allowed" in r.stderr.lower() or "argument" in r.stderr.lower()
+
+
+def test_cli_short_options_work(fixtures_dir, run_script, tmp_path):
+    """Short -b/-n/-o flags are equivalent to their long forms."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "-b", str(fixtures_dir / "base/minimal.yaml"),
+        "-n", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "-o", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    expected = (fixtures_dir / "expected/minimal_homogeneous.yaml").read_text()
+    assert out.read_text() == expected
+
+
+def test_cli_print_cli_no_taints(fixtures_dir, run_script):
+    """--print-cli with no taints prints the equivalent non-interactive command."""
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--out", "result.yaml",
+        "--print-cli",
+    )
+    assert r.returncode == 0, r.stderr
+    assert "customize-daemonset" in r.stdout
+    assert "--base" in r.stdout
+    assert "--nodes" in r.stdout
+    assert "--out" in r.stdout
+    assert "result.yaml" in r.stdout
+    # Should NOT have actually written any output file
+    import pathlib
+    assert not pathlib.Path("result.yaml").exists()
+
+
+def test_cli_print_cli_with_tolerate_all(fixtures_dir, run_script):
+    """--print-cli preserves an explicit --tolerate-all in the output."""
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/with_taints.yaml"),
+        "--tolerate-all",
+        "--print-cli",
+    )
+    assert r.returncode == 0, r.stderr
+    assert "--tolerate-all" in r.stdout
+
+
+def test_cli_print_cli_with_explicit_tolerate(fixtures_dir, run_script):
+    """--print-cli preserves explicit --tolerate flags verbatim."""
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/with_taints.yaml"),
+        "--tolerate", "node-role.kubernetes.io/control-plane:NoSchedule",
+        "--print-cli",
+    )
+    assert r.returncode == 0, r.stderr
+    assert "--tolerate" in r.stdout
+    assert "node-role.kubernetes.io/control-plane:NoSchedule" in r.stdout
+
+
+def test_cli_print_cli_short_flag(fixtures_dir, run_script):
+    """-p is the short form of --print-cli."""
+    r = run_script(
+        "-b", str(fixtures_dir / "base/minimal.yaml"),
+        "-n", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "-p",
+    )
+    assert r.returncode == 0, r.stderr
+    assert "customize-daemonset" in r.stdout

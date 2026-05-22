@@ -38,19 +38,32 @@ customize-daemonset \
 ```
 
 For non-interactive runs where you don't care which taints are present (e.g.
-"just tolerate everything the cluster has"), use `--tolerate-all`:
+"just tolerate everything the cluster has"), use `--tolerate-all` (short: `-T`):
 
 ```bash
-customize-daemonset \
-    --base deployment_file.yaml \
-    --nodes <(kubectl get nodes -o yaml) \
-    --out customized.yaml \
-    --tolerate-all
+customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml -T
 ```
 
 `--tolerate-all` augments the base manifest's existing tolerations with one
 for every taint detected, and works in both interactive and non-interactive
 mode. It is mutually exclusive with `--tolerate`.
+
+### Capture interactive selections into a script
+
+Use `--print-cli` (`-p`) to run the interactive prompts once, then print the
+equivalent non-interactive command instead of generating output. Save the
+command into a script for repeated automated use:
+
+```bash
+customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml --print-cli
+# (prompts you for taint selections)
+# prints:
+# customize-daemonset \
+#     --base template.yaml \
+#     --nodes nodes.yaml \
+#     --out customized.yaml \
+#     --tolerate-all
+```
 
 Interactive (TTY): omit `--base` / `--nodes` / `--tolerate` to be prompted.
 
@@ -69,10 +82,11 @@ commands above.
    **exactly one container** and **no initContainers**. All other documents
    (ServiceAccounts, ClusterRoles, Deployments, etc.) are passed through
    unchanged.
-2. Reads `kubectl get nodes -o yaml`, filters out NotReady nodes, and groups
-   remaining nodes by integer CPU core count. Cordoned nodes
-   (`spec.unschedulable: true`) are kept — DaemonSet pods schedule on cordoned
-   nodes by default in Kubernetes.
+2. Reads `kubectl get nodes -o yaml` and groups every node by integer CPU core
+   count. No soft filtering — cordoned and NotReady nodes are both included
+   (DaemonSet pods schedule on cordoned nodes by default; including NotReady
+   nodes ensures the affinity list stays stable across transient node health
+   blips).
 3. For each group, emits one DaemonSet variant with:
    - Name suffix `-{cores}core`
    - `containers[0].resources` scaled to the group's core count
