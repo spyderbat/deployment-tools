@@ -2,6 +2,7 @@ import pytest
 
 from customize_daemonset import (
     InputValidationError,
+    compute_cluster_totals,
     compute_resources,
     compute_scale_factors,
     format_cpu_millicores,
@@ -176,6 +177,37 @@ def test_compute_scale_factors_mem_cap_below_base_errors():
         )
 
 
+def test_compute_scale_factors_cpu_cap_zero_errors():
+    # cap of 0 would scale every CPU request to 0m -- nonsensical manifest.
+    groups = {8: ["a"]}
+    with pytest.raises(InputValidationError, match="0m"):
+        compute_scale_factors(
+            groups=groups, cpu_per_core_millis=50,
+            max_total_cpu_millis=0, max_total_mem_mi=None,
+        )
+
+
+def test_compute_scale_factors_cpu_cap_zeroes_small_group_errors():
+    # total = 64×50 + 1×50 = 3250m. cap=30m → f_cpu≈0.00923.
+    # small group request = round(0.00923 × 1 × 50) = round(0.46) = 0m → reject.
+    groups = {64: ["big"], 1: ["small"]}
+    with pytest.raises(InputValidationError, match="0m"):
+        compute_scale_factors(
+            groups=groups, cpu_per_core_millis=50,
+            max_total_cpu_millis=30, max_total_mem_mi=None,
+        )
+
+
+def test_compute_scale_factors_cpu_cap_nonzero_request_ok():
+    # cap=800m on total 1600m → f_cpu=0.5; smallest group still rounds > 0m.
+    groups = {8: ["a", "b"], 16: ["c"]}
+    f_cpu, _ = compute_scale_factors(
+        groups=groups, cpu_per_core_millis=50,
+        max_total_cpu_millis=800, max_total_mem_mi=None,
+    )
+    assert f_cpu == 0.5
+
+
 def test_compute_scale_factors_both_caps_independent():
     groups = {8: ["a", "b"]}
     # cpu_total = 2 × 8 × 50 = 800m; cap = 400m → f_cpu = 0.5
@@ -192,6 +224,33 @@ def test_compute_scale_factors_both_caps_independent():
 # ---------------------------------------------------------------------------
 # compute_resources with scale factors
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# compute_cluster_totals
+# ---------------------------------------------------------------------------
+
+def test_compute_cluster_totals_unscaled():
+    # 8-core pod: cpu_req 400m, cpu_lim 2000m, mem_req 1104Mi, mem_lim 2208Mi
+    # 16-core pod: cpu_req 800m, cpu_lim 2000m, mem_req 1184Mi, mem_lim 2368Mi
+    groups = {8: ["a", "b"], 16: ["c"]}
+    t = compute_cluster_totals(groups=groups, cpu_per_core_millis=50)
+    assert t["pods"] == 3
+    assert t["cpu_request_millis"] == 400 * 2 + 800        # 1600
+    assert t["cpu_limit_millis"] == 2000 * 2 + 2000        # 6000
+    assert t["mem_request_mi"] == 1104 * 2 + 1184          # 3392
+    assert t["mem_limit_mi"] == 2208 * 2 + 2368            # 6784
+
+
+def test_compute_cluster_totals_reflects_scaling():
+    # Scaling halves the per-core CPU and memory terms; totals must follow.
+    groups = {8: ["a", "b"]}
+    t = compute_cluster_totals(groups=groups, cpu_per_core_millis=50,
+                               cpu_scale=0.5, mem_per_core_scale=0.5)
+    # per pod: cpu_req round(0.5*8*50)=200m, mem_req 1024+round(0.5*8*10)=1064Mi
+    assert t["pods"] == 2
+    assert t["cpu_request_millis"] == 200 * 2
+    assert t["mem_request_mi"] == 1064 * 2
+
 
 def test_compute_resources_with_scale_factors():
     # 8 cores, 50m/core, scaled CPU to 0.5 and mem-per-core to 0.5

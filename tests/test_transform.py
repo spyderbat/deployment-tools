@@ -5,9 +5,60 @@ import pytest
 from customize_daemonset import (
     InputValidationError,
     Toleration,
+    apply_env_overrides,
     build_variant,
+    derive_cluster_name,
     split_daemonset,
 )
+
+
+# ---------------------------------------------------------------------------
+# derive_cluster_name
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hostnames,expected", [
+    # mixed roles (ms + wk) -> prefix diverges right after "rb"
+    (["demo1rbms001.example.local", "demo1rbms002.example.local",
+      "demo1rbwk004.example.local"], "demo1"),
+    # single role -> prefix runs past "rb" but the digit-rb match still wins
+    (["demo1rbms001.example.local", "demo1rbms002.example.local",
+      "demo1rbms003.example.local"], "demo1"),
+    # no domain, single host
+    (["demo1rbms001"], "demo1"),
+])
+def test_derive_cluster_name(hostnames, expected):
+    assert derive_cluster_name(hostnames) == expected
+
+
+def test_derive_cluster_name_no_match_errors():
+    with pytest.raises(InputValidationError, match="CLUSTER_NAME"):
+        derive_cluster_name(["web-server-01.example.com",
+                             "web-server-02.example.com"])
+
+
+# ---------------------------------------------------------------------------
+# apply_env_overrides
+# ---------------------------------------------------------------------------
+
+def test_apply_env_overrides_creates_env_list():
+    c = {"name": "nano", "image": "x"}
+    apply_env_overrides(c, [("CLUSTER_NAME", "demo1")])
+    assert c["env"] == [{"name": "CLUSTER_NAME", "value": "demo1"}]
+
+
+def test_apply_env_overrides_updates_existing_preserving_others():
+    c = {"name": "nano",
+         "env": [{"name": "CLUSTER_NAME", "value": "old"},
+                 {"name": "FOO", "value": "bar"}]}
+    apply_env_overrides(c, [("CLUSTER_NAME", "new")])
+    assert c["env"][0] == {"name": "CLUSTER_NAME", "value": "new"}
+    assert c["env"][1] == {"name": "FOO", "value": "bar"}
+
+
+def test_apply_env_overrides_appends_new_in_given_order():
+    c = {"name": "nano"}
+    apply_env_overrides(c, [("HTTP_PROXY", "p"), ("HTTPS_PROXY", "p")])
+    assert [e["name"] for e in c["env"]] == ["HTTP_PROXY", "HTTPS_PROXY"]
 
 
 def _ds(name="nano", containers=1, init=False):

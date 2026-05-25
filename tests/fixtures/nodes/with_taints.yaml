@@ -3,7 +3,7 @@ kind: List
 items:
 - apiVersion: v1
   kind: Node
-  metadata: {name: cp-1}
+  metadata: {name: demo1rbcp-1}
   spec:
     taints:
     - {key: "node-role.kubernetes.io/control-plane", effect: NoSchedule}
@@ -12,14 +12,14 @@ items:
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: worker-1}
+  metadata: {name: demo1rbworker-1}
   spec: {}
   status:
     capacity: {cpu: "8"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: worker-2}
+  metadata: {name: demo1rbworker-2}
   spec: {}
   status:
     capacity: {cpu: "8"}

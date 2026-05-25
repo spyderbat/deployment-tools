@@ -22,6 +22,9 @@ spec:
           limits:
             cpu: 2000m
             memory: 2208Mi
+        env:
+        - name: CLUSTER_NAME
+          value: demo1
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -30,6 +33,6 @@ spec:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
-                - node-a
-                - node-b
-                - node-c
+                - demo1rbwk001
+                - demo1rbwk002
+                - demo1rbwk003

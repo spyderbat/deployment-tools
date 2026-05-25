@@ -3,21 +3,21 @@ kind: List
 items:
 - apiVersion: v1
   kind: Node
-  metadata: {name: cordoned-1}
+  metadata: {name: demo1rbcordoned-1}
   spec: {unschedulable: true}
   status:
     capacity: {cpu: "8"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: notready-1}
+  metadata: {name: demo1rbnotready-1}
   spec: {}
   status:
     capacity: {cpu: "8"}
     conditions: [{type: Ready, status: "False"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: healthy-1}
+  metadata: {name: demo1rbhealthy-1}
   spec: {}
   status:
     capacity: {cpu: "8"}

@@ -3,7 +3,7 @@ kind: List
 items:
 - apiVersion: v1
   kind: Node
-  metadata: {name: node-a}
+  metadata: {name: demo1rbwk001}
   spec: {}
   status:
     capacity: {cpu: "8"}
@@ -11,7 +11,7 @@ items:
     - {type: Ready, status: "True"}
 - apiVersion: v1
   kind: Node
-  metadata: {name: node-b}
+  metadata: {name: demo1rbwk002}
   spec: {}
   status:
     capacity: {cpu: "8"}
@@ -19,7 +19,7 @@ items:
     - {type: Ready, status: "True"}
 - apiVersion: v1
   kind: Node
-  metadata: {name: node-c}
+  metadata: {name: demo1rbwk003}
   spec: {}
   status:
     capacity: {cpu: "8"}

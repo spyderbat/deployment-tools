@@ -18,9 +18,19 @@ def _args(**overrides):
         tolerate_all=False,
         interactive=False,
         print_cli=False,
+        proxy=None,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
+
+
+def test_format_proxy_flag():
+    cmd = format_cli_command(_args(proxy="http://proxy.local:3128"))
+    assert "--proxy http://proxy.local:3128" in cmd
+
+
+def test_format_no_proxy_by_default():
+    assert "--proxy" not in format_cli_command(_args())
 
 
 def test_format_minimal():

@@ -37,6 +37,9 @@ spec:
           limits:
             cpu: 2000m
             memory: 2128Mi
+        env:
+        - name: CLUSTER_NAME
+          value: demo1
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -45,8 +48,8 @@ spec:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
-                - small-1
-                - small-2
+                - demo1rbsmall-1
+                - demo1rbsmall-2
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -72,6 +75,9 @@ spec:
           limits:
             cpu: 2000m
             memory: 2208Mi
+        env:
+        - name: CLUSTER_NAME
+          value: demo1
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -80,8 +86,8 @@ spec:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
-                - med-1
-                - med-2
+                - demo1rbmed-1
+                - demo1rbmed-2
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -107,6 +113,9 @@ spec:
           limits:
             cpu: 2000m
             memory: 2368Mi
+        env:
+        - name: CLUSTER_NAME
+          value: demo1
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -115,4 +124,4 @@ spec:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
-                - large-1
+                - demo1rblarge-1

@@ -3,35 +3,35 @@ kind: List
 items:
 - apiVersion: v1
   kind: Node
-  metadata: {name: small-1}
+  metadata: {name: demo1rbsmall-1}
   spec: {}
   status:
     capacity: {cpu: "4"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: small-2}
+  metadata: {name: demo1rbsmall-2}
   spec: {}
   status:
     capacity: {cpu: "4"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: med-1}
+  metadata: {name: demo1rbmed-1}
   spec: {}
   status:
     capacity: {cpu: "8"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: med-2}
+  metadata: {name: demo1rbmed-2}
   spec: {}
   status:
     capacity: {cpu: "8"}
     conditions: [{type: Ready, status: "True"}]
 - apiVersion: v1
   kind: Node
-  metadata: {name: large-1}
+  metadata: {name: demo1rblarge-1}
   spec: {}
   status:
     capacity: {cpu: "16"}

@@ -4,6 +4,7 @@
 
 import argparse
 import copy
+import os
 import pathlib
 import re
 import shlex
@@ -197,6 +198,15 @@ def compute_scale_factors(*, groups, cpu_per_core_millis,
 
     if max_total_cpu_millis is not None and total_cpu_at_1 > max_total_cpu_millis:
         f_cpu = max_total_cpu_millis / total_cpu_at_1
+        # Reject caps so tight that a group's CPU request rounds to 0m: a pod
+        # requesting 0m CPU is almost certainly not what the operator intended.
+        zeroed = [cores for cores in groups
+                  if round(f_cpu * cores * cpu_per_core_millis) == 0]
+        if zeroed:
+            raise InputValidationError(
+                f"CPU cap of {max_total_cpu_millis}m is too low: it would "
+                f"scale the request for {min(zeroed)}-core nodes to 0m"
+            )
     else:
         f_cpu = 1.0
 
@@ -216,6 +226,31 @@ def compute_scale_factors(*, groups, cpu_per_core_millis,
         f_mem = 1.0
 
     return f_cpu, f_mem
+
+
+def compute_cluster_totals(*, groups, cpu_per_core_millis,
+                           cpu_scale: float = 1.0,
+                           mem_per_core_scale: float = 1.0) -> dict:
+    """Sum the resource requests and limits actually emitted across all pods.
+
+    Uses the same per-variant figures as build_variant (via compute_resources)
+    so the totals match the manifest exactly, including any cap scaling.
+
+    Returns a dict with: pods, cpu_request_millis, cpu_limit_millis,
+    mem_request_mi, mem_limit_mi (all ints).
+    """
+    totals = {"pods": 0, "cpu_request_millis": 0, "cpu_limit_millis": 0,
+              "mem_request_mi": 0, "mem_limit_mi": 0}
+    for cores, hosts in groups.items():
+        n = len(hosts)
+        r = compute_resources(cores=cores, cpu_per_core_millis=cpu_per_core_millis,
+                              cpu_scale=cpu_scale, mem_per_core_scale=mem_per_core_scale)
+        totals["pods"] += n
+        totals["cpu_request_millis"] += parse_millicores(r["requests"]["cpu"]) * n
+        totals["cpu_limit_millis"] += parse_millicores(r["limits"]["cpu"]) * n
+        totals["mem_request_mi"] += parse_memory_mi(r["requests"]["memory"]) * n
+        totals["mem_limit_mi"] += parse_memory_mi(r["limits"]["memory"]) * n
+    return totals
 
 
 def parse_cpu_per_core_arg(value: str) -> int:
@@ -522,9 +557,49 @@ def split_daemonset(docs):
     return ds, passthrough
 
 
+def derive_cluster_name(hostnames) -> str:
+    """Derive CLUSTER_NAME from the common prefix of the node hostnames.
+
+    The cluster identifier is one or more digits immediately followed by "rb"
+    in the shared hostname prefix; CLUSTER_NAME is everything up to and
+    including those digits. E.g. hosts like ``demo1rbms001.example.local``
+    and ``demo1rbwk004.example.local`` share the prefix ``demo1rb`` and
+    yield ``demo1``. The domain (anything after the first '.') is ignored.
+
+    Raises InputValidationError if the prefix has no ``<digits>rb`` segment.
+    """
+    shorts = [h.split(".", 1)[0] for h in hostnames]
+    prefix = os.path.commonprefix(shorts)
+    m = re.search(r"(.*\d)rb", prefix)
+    if not m:
+        raise InputValidationError(
+            f"cannot derive CLUSTER_NAME: common hostname prefix {prefix!r} has "
+            f"no '<digits>rb' segment (expected e.g. 'demo1rb…')"
+        )
+    return m.group(1)
+
+
+def apply_env_overrides(container, overrides):
+    """Upsert ``(name, value)`` env vars into a container spec, in order.
+
+    Existing vars with a matching name have their value replaced (other env
+    vars are left untouched); names not present are appended in the order given.
+    """
+    env = container.setdefault("env", [])
+    by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
+    for name, value in overrides:
+        if name in by_name:
+            by_name[name]["value"] = value
+        else:
+            entry = {"name": name, "value": value}
+            env.append(entry)
+            by_name[name] = entry
+
+
 def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerations,
                   cpu_scale: float = 1.0,
-                  mem_per_core_scale: float = 1.0):
+                  mem_per_core_scale: float = 1.0,
+                  env_overrides=None):
     """Build a single DaemonSet variant from the base DS.
 
     `final_tolerations` is either a list of dicts to apply (replacing any
@@ -540,6 +615,9 @@ def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerati
         cores=cores, cpu_per_core_millis=cpu_per_core_millis,
         cpu_scale=cpu_scale, mem_per_core_scale=mem_per_core_scale,
     )
+
+    if env_overrides:
+        apply_env_overrides(container, env_overrides)
 
     pod_spec = v["spec"]["template"]["spec"]
     affinity = pod_spec.setdefault("affinity", {})
@@ -631,10 +709,12 @@ def load_yaml_doc(path) -> dict:
     return docs[0]
 
 
-def write_output(path, docs):
+def write_output(path, docs, *, header=None):
     y = _yaml()
     y.explicit_start = True
     if path is None:
+        if header:
+            sys.stdout.write(header)
         for doc in docs:
             y.dump(doc, sys.stdout)
         return
@@ -642,6 +722,8 @@ def write_output(path, docs):
     if not path.parent.exists():
         raise InputValidationError(f"output directory does not exist: {path.parent}")
     with path.open("w") as f:
+        if header:
+            f.write(header)
         for doc in docs:
             y.dump(doc, f)
 
@@ -678,6 +760,9 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--max-total-memory", default=None,
                    help="Cap on total cluster memory requests (e.g., '200Gi'). "
                         "If totals exceed this, the memory per-core term is reduced uniformly.")
+    p.add_argument("--proxy", default=None, metavar="URL",
+                   help="Set HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy "
+                        "in the container to this value.")
     return p
 
 
@@ -707,6 +792,8 @@ def format_cli_command(args, *, final_tolerations_from_prompt=None,
         parts.append(f"--max-total-cpu {shlex.quote(args.max_total_cpu)}")
     if args.max_total_memory:
         parts.append(f"--max-total-memory {shlex.quote(args.max_total_memory)}")
+    if args.proxy:
+        parts.append(f"--proxy {shlex.quote(args.proxy)}")
 
     if args.tolerate:
         # User passed --tolerate flags explicitly; preserve them verbatim.
@@ -729,6 +816,37 @@ def format_cli_command(args, *, final_tolerations_from_prompt=None,
     return " \\\n    ".join(parts)
 
 
+_GENERATED_MARKER = "Generated by customize-daemonset"
+
+
+def format_output_header(*, command: str, totals: dict) -> str:
+    """Render the comment block prepended to generated output.
+
+    Doubles as documentation (the equivalent CLI command + cluster resource
+    totals) and as the marker that lets us reject this file if it is later fed
+    back in as a --base manifest. Every line is a YAML comment.
+    """
+    cmd_lines = command.splitlines() or [command]
+    lines = [
+        f"# {_GENERATED_MARKER} — re-using this file as --base will be rejected.",
+        "# Command:",
+    ]
+    lines += [f"#   {cl}" for cl in cmd_lines]
+    lines += [
+        f"# Totals across {totals['pods']} pods (final, post-scaling):",
+        f"#   CPU:    requests {totals['cpu_request_millis'] / 1000:.2f} cores, "
+        f"limits {totals['cpu_limit_millis'] / 1000:.2f} cores",
+        f"#   memory: requests {totals['mem_request_mi'] / 1024:.2f}Gi, "
+        f"limits {totals['mem_limit_mi'] / 1024:.2f}Gi",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def text_is_generated_output(text: str) -> bool:
+    """True if raw manifest text was produced by a previous customize-daemonset run."""
+    return _GENERATED_MARKER in text
+
+
 def _run(args, *, stdin_is_tty: bool) -> int:
     if args.interactive or (stdin_is_tty and (not args.base or not args.nodes)):
         # Interactive mode is wired in Task 14. For now, error if any
@@ -742,12 +860,26 @@ def _run(args, *, stdin_is_tty: bool) -> int:
     cpu_per_core_millis = parse_cpu_per_core_arg(args.cpu_request_per_core)
     explicit_tolerations = [parse_tolerate_arg(s) for s in args.tolerate]
 
+    base_path = pathlib.Path(args.base)
+    if base_path.exists() and text_is_generated_output(base_path.read_text()):
+        raise InputValidationError(
+            f"{args.base} appears to be output from a previous customize-daemonset "
+            f"run; refusing to use generated output as a --base manifest"
+        )
+
     base_docs = load_yaml_docs(args.base)
     nodes_doc = load_yaml_doc(args.nodes)
 
     ds_doc, passthrough_docs = split_daemonset(base_docs)
     base_tolerations = (((ds_doc.get("spec") or {}).get("template") or {})
                         .get("spec") or {}).get("tolerations")
+    if base_tolerations:
+        ds_name = (ds_doc.get("metadata") or {}).get("name", "<unnamed>")
+        raise InputValidationError(
+            f"base DaemonSet {ds_name!r} already defines "
+            f"spec.template.spec.tolerations; remove them and let this tool "
+            f"manage tolerations via --tolerate / --tolerate-all"
+        )
 
     node_infos = extract_nodes(nodes_doc)
 
@@ -768,26 +900,30 @@ def _run(args, *, stdin_is_tty: bool) -> int:
         prompt_fn=_recording_prompt if stdin_is_tty else None,
     )
 
+    # Reconstruct what an equivalent CLI invocation would look like, including
+    # any interactive taint selection. Used both for --print-cli and for the
+    # provenance header embedded in the output.
+    selected = prompt_result["selected"]
+    final_from_prompt = None
+    all_selected = False
+    if selected is not None:
+        final_from_prompt = [
+            Toleration(key=t.key,
+                       operator="Equal" if t.value else "Exists",
+                       value=t.value,
+                       effect=t.effect)
+            for t in selected
+        ]
+        all_selected = (selected == prompt_result["all_taints"])
+
+    command = format_cli_command(
+        args,
+        final_tolerations_from_prompt=final_from_prompt,
+        all_taints_selected=all_selected,
+    )
+
     if args.print_cli:
-        selected = prompt_result["selected"]
-        all_taints = prompt_result["all_taints"]
-        final_from_prompt = None
-        all_selected = False
-        if selected is not None:
-            # Synthesize Toleration objects matching what the interactive path produced
-            final_from_prompt = [
-                Toleration(key=t.key,
-                           operator="Equal" if t.value else "Exists",
-                           value=t.value,
-                           effect=t.effect)
-                for t in selected
-            ]
-            all_selected = (selected == all_taints)
-        print(format_cli_command(
-            args,
-            final_tolerations_from_prompt=final_from_prompt,
-            all_taints_selected=all_selected,
-        ))
+        print(command)
         return 0
     if excluded:
         print(f"excluded {len(excluded)} nodes due to unmatched taints: "
@@ -830,6 +966,15 @@ def _run(args, *, stdin_is_tty: bool) -> int:
             file=sys.stderr,
         )
 
+    # CLUSTER_NAME is cluster-wide: derive once from every usable hostname and
+    # write the same value into each variant. --proxy fans out to all four
+    # proxy env vars with the same value.
+    env_overrides = [("CLUSTER_NAME", derive_cluster_name(
+        [n.hostname for n in usable_nodes]))]
+    if args.proxy:
+        env_overrides += [(var, args.proxy) for var in
+                          ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")]
+
     variants = [
         build_variant(
             base=ds_doc,
@@ -839,11 +984,17 @@ def _run(args, *, stdin_is_tty: bool) -> int:
             final_tolerations=final_tolerations,
             cpu_scale=f_cpu,
             mem_per_core_scale=f_mem,
+            env_overrides=env_overrides,
         )
         for cores, hostnames in groups.items()
     ]
 
-    write_output(args.out, passthrough_docs + variants)
+    totals = compute_cluster_totals(
+        groups=groups, cpu_per_core_millis=cpu_per_core_millis,
+        cpu_scale=f_cpu, mem_per_core_scale=f_mem,
+    )
+    header = format_output_header(command=command, totals=totals)
+    write_output(args.out, passthrough_docs + variants, header=header)
     return 0
 
 

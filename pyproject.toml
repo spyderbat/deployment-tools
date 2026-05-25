@@ -12,9 +12,6 @@ dependencies = [
     "InquirerPy>=0.3.4",
 ]
 
-[project.scripts]
-customize-daemonset = "customize_daemonset:main"
-
 [tool.setuptools]
 py-modules = ["customize_daemonset"]
 

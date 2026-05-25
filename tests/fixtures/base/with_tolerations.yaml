@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent
+spec:
+  selector:
+    matchLabels:
+      app: nanoagent
+  template:
+    metadata:
+      labels:
+        app: nanoagent
+    spec:
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: nanoagent
+        image: spyderbat/nano:v1
