@@ -408,3 +408,49 @@ def test_cli_print_cli_short_flag(fixtures_dir, run_script):
     )
     assert r.returncode == 0, r.stderr
     assert "customize-daemonset" in r.stdout
+
+
+def _deployment_env(out_path):
+    """Return the {name: value} env map of the Cluster Monitor Deployment in
+    a generated output file."""
+    from customize_daemonset import load_yaml_docs
+    docs = load_yaml_docs(str(out_path))
+    dep = next(d for d in docs if d and d.get("kind") == "Deployment")
+    container = dep["spec"]["template"]["spec"]["containers"][0]
+    return {e["name"]: e.get("value") for e in container["env"]}
+
+
+def test_cli_propagates_cluster_name_and_proxy_to_deployment(
+        fixtures_dir, run_script, tmp_path):
+    """CLUSTER_NAME and proxy values reach the Cluster Monitor Deployment too,
+    not just the DaemonSet; NO_PROXY is left untouched."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/with_clustermonitor.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--proxy", "http://proxy.local:3128",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    env = _deployment_env(out)
+    assert env["CLUSTER_NAME"] == "demo1"
+    assert env["HTTP_PROXY"] == "http://proxy.local:3128"
+    assert env["https_proxy"] == "http://proxy.local:3128"
+    assert env["NO_PROXY"] == "10.0.0.0/8"
+
+
+def test_cli_propagates_cluster_name_but_not_proxy_without_flag(
+        fixtures_dir, run_script, tmp_path):
+    """Without --proxy the Deployment's cluster name is updated, but its proxy
+    vars stay at their template values."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/with_clustermonitor.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    env = _deployment_env(out)
+    assert env["CLUSTER_NAME"] == "demo1"
+    assert env["HTTP_PROXY"] == "http://placeholder:3128"
+    assert env["https_proxy"] == "http://placeholder:3128"

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent
+spec:
+  selector:
+    matchLabels:
+      app: nanoagent
+  template:
+    metadata:
+      labels:
+        app: nanoagent
+    spec:
+      containers:
+      - name: nanoagent
+        image: spyderbat/nano:v1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clustermonitor-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clustermonitor
+  template:
+    metadata:
+      labels:
+        app: clustermonitor
+    spec:
+      containers:
+      - name: clustermonitor
+        image: spyderbat/nano:v1
+        env:
+        - name: CLUSTER_NAME
+          value: PLACEHOLDER
+        - name: HTTP_PROXY
+          value: http://placeholder:3128
+        - name: https_proxy
+          value: http://placeholder:3128
+        - name: NO_PROXY
+          value: 10.0.0.0/8

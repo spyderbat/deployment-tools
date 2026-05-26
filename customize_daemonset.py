@@ -584,6 +584,11 @@ def apply_env_overrides(container, overrides):
 
     Existing vars with a matching name have their value replaced (other env
     vars are left untouched); names not present are appended in the order given.
+
+    This is the DaemonSet path and matches by *exact* name (and injects when
+    missing). The passthrough path uses `apply_consistent_env`, which matches by
+    *normalized* name and never injects. The DaemonSet templates we ship use the
+    canonical names, so the two never disagree in practice.
     """
     env = container.setdefault("env", [])
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
@@ -594,6 +599,70 @@ def apply_env_overrides(container, overrides):
             entry = {"name": name, "value": value}
             env.append(entry)
             by_name[name] = entry
+
+
+def _normalize_env_name(name) -> str:
+    """Collapse an env-var name to a comparison key: lowercase, alphanumerics
+    only. So CLUSTER_NAME, Cluster_Name, ClusterName and cluster-name all map to
+    'clustername', and HTTP_PROXY / http_proxy / HTTPProxy all map to
+    'httpproxy'. NO_PROXY maps to 'noproxy', which is in neither matched set."""
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+_CLUSTER_NAME_NORMS = {"clustername"}
+_PROXY_NORMS = {"httpproxy", "httpsproxy"}
+
+
+def apply_consistent_env(container, *, cluster_name, proxy):
+    """Update — never add — env vars so cluster-name and HTTP(S) proxy vars in
+    `container` match the values written into the DaemonSet.
+
+    A var whose name normalizes (see `_normalize_env_name`) into the
+    cluster-name set has its literal value set to `cluster_name`. A var that
+    normalizes into the proxy set has its value set to `proxy`, but only when
+    `proxy` is not None (without --proxy we leave every proxy var as-is).
+    NO_PROXY normalizes to 'noproxy', so it is never touched. Entries that
+    source their value via `valueFrom` are left alone — overwriting a config or
+    secret reference with a literal would be wrong. Names not already present
+    are never appended.
+    """
+    env = container.get("env")
+    if not isinstance(env, list):
+        return
+    for entry in env:
+        if not isinstance(entry, dict) or "valueFrom" in entry:
+            continue
+        norm = _normalize_env_name(entry.get("name", ""))
+        if norm in _CLUSTER_NAME_NORMS:
+            entry["value"] = cluster_name
+        elif proxy is not None and norm in _PROXY_NORMS:
+            entry["value"] = proxy
+
+
+def _iter_workload_containers(doc):
+    """Yield every container and initContainer in a workload document.
+
+    Handles the pod-template kinds (Deployment, DaemonSet, StatefulSet,
+    ReplicaSet, Job — all of which carry the pod spec at spec.template.spec) and
+    bare Pods (spec.containers). Documents with no pod spec (Service,
+    ConfigMap, RBAC objects, …) yield nothing. CronJobs, whose pod spec is
+    nested under spec.jobTemplate.spec.template.spec, are intentionally not
+    handled — no Spyderbat manifest ships one.
+    """
+    if not isinstance(doc, dict):
+        return
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return
+    template = spec.get("template")
+    if isinstance(template, dict) and isinstance(template.get("spec"), dict):
+        pod_spec = template["spec"]
+    else:
+        pod_spec = spec  # bare Pod, or a non-workload doc (yields nothing)
+    for key in ("containers", "initContainers"):
+        for container in (pod_spec.get(key) or []):
+            if isinstance(container, dict):
+                yield container
 
 
 def build_variant(*, base, cores, hostnames, cpu_per_core_millis, final_tolerations,
@@ -969,8 +1038,8 @@ def _run(args, *, stdin_is_tty: bool) -> int:
     # CLUSTER_NAME is cluster-wide: derive once from every usable hostname and
     # write the same value into each variant. --proxy fans out to all four
     # proxy env vars with the same value.
-    env_overrides = [("CLUSTER_NAME", derive_cluster_name(
-        [n.hostname for n in usable_nodes]))]
+    cluster_name = derive_cluster_name([n.hostname for n in usable_nodes])
+    env_overrides = [("CLUSTER_NAME", cluster_name)]
     if args.proxy:
         env_overrides += [(var, args.proxy) for var in
                           ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")]
@@ -988,6 +1057,15 @@ def _run(args, *, stdin_is_tty: bool) -> int:
         )
         for cores, hostnames in groups.items()
     ]
+
+    # Keep the other workload docs (e.g. the Cluster Monitor Deployment) in
+    # sync with the DaemonSet: propagate the same CLUSTER_NAME, and the --proxy
+    # value when given, into any matching env vars they already define.
+    # Update-only — nothing is injected into containers that lack these vars.
+    for doc in passthrough_docs:
+        for container in _iter_workload_containers(doc):
+            apply_consistent_env(container, cluster_name=cluster_name,
+                                 proxy=args.proxy)
 
     totals = compute_cluster_totals(
         groups=groups, cpu_per_core_millis=cpu_per_core_millis,
