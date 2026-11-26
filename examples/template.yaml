@@ -77,3 +77,12 @@ spec:
           value: CHANGE_ME
         - name: K8SMONITOR
           value: "true"
+        # Defaults from the public nanoagent Helm chart (1.1.4). The tool
+        # passes this Deployment through without changing its resources.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 6000m
+            memory: 2048Mi
