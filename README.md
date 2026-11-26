@@ -136,12 +136,12 @@ the digits that immediately precede `rb`. The domain (anything after the first
 `.`) is ignored. For example, nodes:
 
 ```
-demo1rbms001.example.local
-demo1rbms002.example.local
-demo1rbwk004.example.local
+clus1abc.foo.local
+clus1aff.foo.local
+clus1xyz.foo.local
 ```
 
-share the prefix `demo1rb`, so `CLUSTER_NAME` is set to `demo1`. If the
+share the prefix `clus1`, so `CLUSTER_NAME` is set to `clus1`. If the
 hostnames have no `<digits>rb` prefix, the tool errors out rather than guessing.
 
 ### Provenance header
