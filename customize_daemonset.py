@@ -574,7 +574,8 @@ def derive_cluster_name(hostnames) -> str:
     if not m:
         raise InputValidationError(
             f"cannot derive CLUSTER_NAME: common hostname prefix {prefix!r} has "
-            f"no '<digits>rb' segment (expected e.g. 'demo1rb…')"
+            f"no '<digits>rb' segment (expected e.g. 'demo1rb…'); "
+            f"pass --cluster-name to set it explicitly"
         )
     return m.group(1)
 
@@ -832,6 +833,9 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--proxy", default=None, metavar="URL",
                    help="Set HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy "
                         "in the container to this value.")
+    p.add_argument("-c", "--cluster-name", default=None, metavar="NAME",
+                   help="Set CLUSTER_NAME to this value instead of deriving it "
+                        "from the node hostnames.")
     return p
 
 
@@ -863,6 +867,8 @@ def format_cli_command(args, *, final_tolerations_from_prompt=None,
         parts.append(f"--max-total-memory {shlex.quote(args.max_total_memory)}")
     if args.proxy:
         parts.append(f"--proxy {shlex.quote(args.proxy)}")
+    if args.cluster_name:
+        parts.append(f"--cluster-name {shlex.quote(args.cluster_name)}")
 
     if args.tolerate:
         # User passed --tolerate flags explicitly; preserve them verbatim.
@@ -1035,10 +1041,15 @@ def _run(args, *, stdin_is_tty: bool) -> int:
             file=sys.stderr,
         )
 
-    # CLUSTER_NAME is cluster-wide: derive once from every usable hostname and
-    # write the same value into each variant. --proxy fans out to all four
-    # proxy env vars with the same value.
-    cluster_name = derive_cluster_name([n.hostname for n in usable_nodes])
+    # CLUSTER_NAME is cluster-wide: take --cluster-name, else derive once from
+    # every usable hostname, and write the same value into each variant.
+    # --proxy fans out to all four proxy env vars with the same value.
+    if args.cluster_name is not None:
+        cluster_name = args.cluster_name.strip()
+        if not cluster_name:
+            raise InputValidationError("--cluster-name must not be blank")
+    else:
+        cluster_name = derive_cluster_name([n.hostname for n in usable_nodes])
     env_overrides = [("CLUSTER_NAME", cluster_name)]
     if args.proxy:
         env_overrides += [(var, args.proxy) for var in

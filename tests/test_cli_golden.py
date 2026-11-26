@@ -367,6 +367,49 @@ def test_cli_cluster_name_no_match_errors(fixtures_dir, run_script, tmp_path):
     )
     assert r.returncode == 1
     assert "CLUSTER_NAME" in r.stderr
+    assert "--cluster-name" in r.stderr
+    assert not out.exists()
+
+
+def test_cli_explicit_cluster_name_skips_derivation(fixtures_dir, run_script, tmp_path):
+    """--cluster-name works for hostnames that don't follow the '<digits>rb' rule."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/bad_hostnames.yaml"),
+        "--cluster-name", "prod-east",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    text = out.read_text()
+    assert "value: prod-east" in text
+    assert "--cluster-name prod-east" in text  # recorded in provenance header
+
+
+def test_cli_explicit_cluster_name_overrides_derived(fixtures_dir, run_script, tmp_path):
+    """--cluster-name wins over the derived value, in the DaemonSet and Deployment."""
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/with_clustermonitor.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "-c", "prod-east",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    assert _deployment_env(out)["CLUSTER_NAME"] == "prod-east"
+    assert "value: demo1" not in out.read_text()
+
+
+def test_cli_blank_cluster_name_rejected(fixtures_dir, run_script, tmp_path):
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(fixtures_dir / "base/minimal.yaml"),
+        "--nodes", str(fixtures_dir / "nodes/homogeneous_8core.yaml"),
+        "--cluster-name", "  ",
+        "--out", str(out),
+    )
+    assert r.returncode == 1
+    assert "--cluster-name" in r.stderr
     assert not out.exists()
 
 
@@ -454,3 +497,4 @@ def test_cli_propagates_cluster_name_but_not_proxy_without_flag(
     assert env["CLUSTER_NAME"] == "demo1"
     assert env["HTTP_PROXY"] == "http://placeholder:3128"
     assert env["https_proxy"] == "http://placeholder:3128"
+

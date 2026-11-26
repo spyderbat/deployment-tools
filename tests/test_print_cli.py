@@ -19,6 +19,7 @@ def _args(**overrides):
         interactive=False,
         print_cli=False,
         proxy=None,
+        cluster_name=None,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -31,6 +32,15 @@ def test_format_proxy_flag():
 
 def test_format_no_proxy_by_default():
     assert "--proxy" not in format_cli_command(_args())
+
+
+def test_format_cluster_name_flag():
+    cmd = format_cli_command(_args(cluster_name="prod east"))
+    assert "--cluster-name 'prod east'" in cmd
+
+
+def test_format_no_cluster_name_by_default():
+    assert "--cluster-name" not in format_cli_command(_args())
 
 
 def test_format_minimal():
