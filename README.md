@@ -94,6 +94,10 @@ DaemonSet named `<original-name>-<cores>core` (for example
 - has `CLUSTER_NAME` set, plus the proxy variables if you passed `--proxy`;
 - tolerates the taints you chose.
 
+The tool replaces any resources or node affinity the template's DaemonSet
+already has, so you don't need to set them there. It must not set tolerations
+(see [Limits](#limits)).
+
 Everything else in the input file (ServiceAccounts, RBAC, Deployments and so
 on) is copied through unchanged, with one exception. `CLUSTER_NAME` and, with
 `--proxy`, the proxy variables are also updated in any other workload that

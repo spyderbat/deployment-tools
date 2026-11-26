@@ -1,6 +1,10 @@
 # Synthetic example base manifest: a Nano Agent DaemonSet plus the Cluster
 # Monitor Deployment, in the shape `helm template` produces. Replace the image
 # and registration code with your own before applying anything.
+#
+# The DaemonSet has no resources, node affinity or tolerations: the tool sets
+# those for each node size, replacing anything already there. CLUSTER_NAME is
+# also set by the tool, from --cluster-name.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -36,13 +40,6 @@ spec:
           value: REPLACE_WITH_YOUR_REGISTRATION_CODE
         - name: CLUSTER_NAME
           value: CHANGE_ME
-        resources:
-          requests:
-            cpu: 100m
-            memory: 512Mi
-          limits:
-            cpu: 1000m
-            memory: 1Gi
         volumeMounts:
         - name: hostetc
           mountPath: /etc
