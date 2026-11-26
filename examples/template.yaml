@@ -1,0 +1,82 @@
+# Synthetic example base manifest: a Nano Agent DaemonSet plus the Cluster
+# Monitor Deployment, in the shape `helm template` produces. Replace the image
+# and registration code with your own before applying anything.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spyderbat-serviceaccount
+  namespace: spyderbat
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spyderbat-nanoagent
+  namespace: spyderbat
+spec:
+  selector:
+    matchLabels:
+      app: nanoagent
+  template:
+    metadata:
+      labels:
+        app: nanoagent
+    spec:
+      serviceAccountName: spyderbat-serviceaccount
+      hostPID: true
+      hostNetwork: true
+      containers:
+      - name: nanoagent
+        image: registry.example.com/spyderbat/nano-agent:latest
+        securityContext:
+          privileged: true
+        env:
+        - name: ORC_URL
+          value: https://orc.spyderbat.com/
+        - name: AGENT_REGISTRATION_CODE
+          value: REPLACE_WITH_YOUR_REGISTRATION_CODE
+        - name: CLUSTER_NAME
+          value: CHANGE_ME
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        volumeMounts:
+        - name: hostetc
+          mountPath: /etc
+          readOnly: true
+      volumes:
+      - name: hostetc
+        hostPath:
+          path: /etc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clustermonitor-deployment
+  namespace: spyderbat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clustermonitor
+  template:
+    metadata:
+      labels:
+        app: clustermonitor
+    spec:
+      serviceAccountName: spyderbat-serviceaccount
+      containers:
+      - name: clustermonitor
+        image: registry.example.com/spyderbat/nano-agent:latest
+        env:
+        - name: ORC_URL
+          value: https://orc.spyderbat.com/
+        - name: AGENT_REGISTRATION_CODE
+          value: REPLACE_WITH_YOUR_REGISTRATION_CODE
+        - name: CLUSTER_NAME
+          value: CHANGE_ME
+        - name: K8SMONITOR
+          value: "true"

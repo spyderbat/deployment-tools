@@ -498,3 +498,22 @@ def test_cli_propagates_cluster_name_but_not_proxy_without_flag(
     assert env["HTTP_PROXY"] == "http://placeholder:3128"
     assert env["https_proxy"] == "http://placeholder:3128"
 
+
+def test_examples_run_as_documented(fixtures_dir, run_script, tmp_path):
+    """The sample files in examples/ work with the README's flags."""
+    from customize_daemonset import load_yaml_docs
+    examples = fixtures_dir.parent.parent / "examples"
+    out = tmp_path / "out.yaml"
+    r = run_script(
+        "--base", str(examples / "template.yaml"),
+        "--nodes", str(examples / "nodes.yaml"),
+        "--cluster-name", "demo-cluster",
+        "--tolerate-all",
+        "--out", str(out),
+    )
+    assert r.returncode == 0, r.stderr
+    names = sorted(d["metadata"]["name"] for d in load_yaml_docs(str(out))
+                   if d and d.get("kind") == "DaemonSet")
+    assert names == ["spyderbat-nanoagent-16core", "spyderbat-nanoagent-32core",
+                     "spyderbat-nanoagent-4core"]
+    assert _deployment_env(out)["CLUSTER_NAME"] == "demo-cluster"

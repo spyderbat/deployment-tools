@@ -1,153 +1,110 @@
-# DaemonSet Customizer
+# customize-daemonset
 
-Generates per-core-count Kubernetes DaemonSet variants from a single base
-manifest, with resource requests/limits scaled to each node's CPU capacity,
-hostname-based node affinity, an auto-derived `CLUSTER_NAME`, and optional
-proxy settings. Designed for Spyderbat Nano Agent deployments; see
-`docs/design.md` for the full spec.
+A Kubernetes DaemonSet gives every node the same CPU and memory requests. On a
+cluster with mixed node sizes, those requests are too large for the small nodes
+or too small for the big ones. `customize-daemonset` reads your DaemonSet
+manifest and your cluster's node list, and writes one DaemonSet per node size,
+each sized to its nodes and pinned to them by hostname.
 
-## Quick start (standalone bundle — no install)
+It was built for the Spyderbat Nano Agent, but works with any single-container
+DaemonSet.
 
-The intended way to ship this to a cluster operator. Build a self-contained
-tarball, copy it to the target Linux machine, and run it directly — no `pip`,
-no `pipx`, no network access required on the target. It only needs a
-compatible Python (3.10+).
+## Requirements
 
-Build (on a machine with internet + pip):
+- Linux or macOS with Python 3.10 or later.
+- `kubectl` access to the cluster, to export the node list.
+
+## Install
+
+### Standalone bundle (no pip on the target machine)
+
+Build the bundle on any machine with internet access:
 
 ```bash
-make build          # equivalently: ./build-standalone.sh
-# -> dist/customize-daemonset.tar.gz
+git clone https://github.com/spyderbat/deployment-tools.git
+cd deployment-tools
+make build            # writes dist/customize-daemonset.tar.gz
 ```
 
-Run on the target machine:
+Copy the tarball to the machine that will run the tool, then:
 
 ```bash
 tar xzf customize-daemonset.tar.gz
 cd customize-daemonset
-./customize-daemonset \
-    --base deployment_file.yaml \
-    --nodes nodes.yaml \
-    --out customized.yaml
+./customize-daemonset --help
 ```
 
-All Python dependencies are vendored under `_vendor/`; the `./customize-daemonset`
-launcher puts them on `PYTHONPATH` and invokes `python3`. See
-[Building the standalone bundle](#building-the-standalone-bundle) for details.
+The bundle carries its own dependencies and needs no network access.
 
-## Usage
-
-Non-interactive (recommended for CI):
+### From a clone
 
 ```bash
-customize-daemonset \
-    --base deployment_file.yaml \
-    --nodes <(kubectl get nodes -o yaml) \
-    --out customized.yaml \
-    --tolerate node-role.kubernetes.io/control-plane:NoSchedule
+git clone https://github.com/spyderbat/deployment-tools.git
+cd deployment-tools
+python3 -m pip install -r requirements.txt
+python3 customize_daemonset.py --help
 ```
 
-(In the standalone bundle, substitute `./customize-daemonset`; in a dev venv,
-substitute `.venv/bin/python customize_daemonset.py`.)
+The examples below write the command as `customize-daemonset`. Substitute
+`./customize-daemonset` (bundle) or `python3 customize_daemonset.py` (clone).
 
-### Tolerations
+## Quick start
 
-- `--tolerate KEY[=VALUE]:EFFECT` (short `-t`, repeatable) — set exactly these
-  tolerations.
-- `--tolerate-all` (short `-T`) — auto-tolerate every distinct taint detected
-  on the input nodes. Works in interactive and non-interactive mode. Mutually
-  exclusive with `--tolerate`.
+1. Export the node list:
 
-The base manifest must **not** carry its own `spec.template.spec.tolerations`
-(this tool manages tolerations) — a base with tolerations is rejected. See
-[Limits](#limits).
+   ```bash
+   kubectl get nodes -o yaml > nodes.yaml
+   ```
 
-### Proxy settings
+2. Generate the customized manifest from your DaemonSet manifest (for example,
+   the output of `helm template`):
 
-`--proxy URL` sets all four proxy environment variables on the container to the
-same value: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`.
+   ```bash
+   customize-daemonset --base template.yaml --nodes nodes.yaml \
+       --cluster-name prod-east --out customized.yaml
+   ```
+
+3. Review `customized.yaml`, then apply it:
+
+   ```bash
+   kubectl apply -f customized.yaml
+   ```
+
+If you leave out `--base` or `--nodes` in a terminal, the tool prompts for
+them.
+
+To try it without a cluster, use the synthetic sample files in `examples/`:
 
 ```bash
-customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml \
-    --proxy http://proxy.corp.local:3128
+customize-daemonset -b examples/template.yaml -n examples/nodes.yaml \
+    -c demo-cluster --tolerate-all
 ```
 
-### Capture interactive selections into a script
+This prints three DaemonSets, for the 4-, 16- and 32-core nodes in the sample.
 
-Use `--print-cli` (`-p`) to run the interactive prompts once, then print the
-equivalent non-interactive command instead of generating output:
+## What you get
 
-```bash
-customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml --print-cli
-# (prompts you for taint selections)
-# prints:
-# customize-daemonset \
-#     --base template.yaml \
-#     --nodes nodes.yaml \
-#     --out customized.yaml \
-#     --tolerate-all
-```
+For each distinct CPU core count among your nodes, the output has one
+DaemonSet named `<original-name>-<cores>core` (for example
+`spyderbat-nanoagent-8core`). Each one:
 
-The same command is also embedded as a comment at the top of every generated
-output file (see [Provenance header](#provenance-header)).
+- runs only on the nodes with that core count, matched by hostname;
+- has CPU and memory requests and limits sized for that core count (see
+  [How resources are sized](#how-resources-are-sized));
+- has `CLUSTER_NAME` set, plus the proxy variables if you passed `--proxy`;
+- tolerates the taints you chose.
 
-### Interactive (TTY)
+Everything else in the input file (ServiceAccounts, RBAC, Deployments and so
+on) is copied through unchanged, with one exception. `CLUSTER_NAME` and, with
+`--proxy`, the proxy variables are also updated in any other workload that
+already defines them, such as the Spyderbat Cluster Monitor Deployment, so the
+values stay consistent.
 
-Omit `--base` / `--nodes` / `--tolerate` to be prompted:
+Cordoned and NotReady nodes are included, so the node lists don't change when a
+node is drained or briefly unhealthy.
 
-```
-customize-daemonset
-# -> prompts for paths, then a checkbox of detected taints
-```
-
-## How it works
-
-1. Reads the base manifest. It must contain **exactly one DaemonSet** with
-   **exactly one container** and **no initContainers**. All other documents
-   (ServiceAccounts, ClusterRoles, Deployments, etc.) are passed through
-   unchanged.
-2. Reads `kubectl get nodes -o yaml` and groups every node by integer CPU core
-   count. No soft filtering — cordoned and NotReady nodes are both included
-   (DaemonSet pods schedule on cordoned nodes by default; including NotReady
-   nodes keeps the affinity list stable across transient health blips).
-3. Derives `CLUSTER_NAME` from the common hostname prefix (see below).
-4. For each group, emits one DaemonSet variant with:
-   - Name suffix `-{cores}core`
-   - `containers[0].resources` scaled to the group's core count
-   - `nodeAffinity` matching `kubernetes.io/hostname In [<group hosts>]`
-   - Env vars: `CLUSTER_NAME`, plus the four proxy vars if `--proxy` was given
-     (added if absent, updated in place if already present)
-   - Tolerations from `--tolerate` / `--tolerate-all` / interactive selection
-
-Resource formula (CPU coefficient `C` from `--cpu-request-per-core`, default
-`50m`):
-
-```
-cpu_request_millis = cores * C
-cpu_limit_millis   = max(2000, cpu_request_millis)
-mem_request_Mi     = 1024 + (cores * 10)
-mem_limit_Mi       = mem_request_Mi * 2
-```
-
-### CLUSTER_NAME derivation
-
-`CLUSTER_NAME` is set to the common hostname prefix, taken up to and including
-the digits that immediately precede `rb`. The domain (anything after the first
-`.`) is ignored. For example, nodes:
-
-```
-clus1abc.foo.local
-clus1aff.foo.local
-clus1xyz.foo.local
-```
-
-share the prefix `clus1`, so `CLUSTER_NAME` is set to `clus1`. If the
-hostnames have no `<digits>rb` prefix, the tool errors out rather than guessing.
-
-### Provenance header
-
-Every generated output file begins with a comment block recording the
-equivalent CLI command and the total cluster resource requests/limits, e.g.:
+The top of the output file records the command that produced it and the total
+requests and limits across the cluster:
 
 ```yaml
 # Generated by customize-daemonset — re-using this file as --base will be rejected.
@@ -161,100 +118,113 @@ equivalent CLI command and the total cluster resource requests/limits, e.g.:
 #   memory: requests 8.05Gi, limits 16.10Gi
 ```
 
-This header doubles as a guard: feeding a previously generated file back in as
-`--base` is detected via this marker and rejected, so the common mistake of
-`--base out.yaml` (instead of the original template) fails fast.
+To regenerate after the cluster changes, rerun that command against the
+original template and a fresh node list. The tool rejects its own output as
+`--base`.
 
-### Cluster resource caps (optional)
+## Common tasks
 
-`--max-total-cpu` and `--max-total-memory` cap the total cluster request:
+### Tainted nodes
 
-- `--max-total-cpu 100` — total `cpu.requests` across all pods cannot exceed 100 CPUs
-- `--max-total-memory 200Gi` — total `memory.requests` across all pods cannot exceed 200 GiB
+Pods won't schedule on a tainted node unless they tolerate the taint. If any
+node is tainted, the tool needs to know which taints to tolerate:
 
-If the natural total exceeds a cap, the per-core scaling factor for that
-dimension is reduced uniformly across all variants. The 1Gi-per-pod memory base
-is never scaled — if the cap is below the cumulative base, the tool errors out.
-A CPU cap so tight that it would round any pod's request to `0m` is also
-rejected rather than emitting a useless manifest.
+- In a terminal, it shows a checklist of the taints it found, with node counts.
+- `--tolerate-all` (`-T`) tolerates every taint it found.
+- `--tolerate KEY[=VALUE]:EFFECT` (`-t`, repeatable) tolerates exactly the ones
+  you list:
 
-## Building the standalone bundle
+  ```bash
+  customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml \
+      -t node-role.kubernetes.io/control-plane:NoSchedule \
+      -t dedicated=gpu:NoSchedule
+  ```
 
-```bash
-make build          # equivalently: ./build-standalone.sh
-```
+Without a terminal and without either flag, a tainted node list is an error.
 
-This vendors the runtime dependencies (`ruamel.yaml`, `InquirerPy`, and their
-transitive deps) into `dist/customize-daemonset/_vendor/`, copies the script and
-a launcher alongside them, and tars the directory into
-`dist/customize-daemonset.tar.gz`. Compiled extensions (`*.so`) are stripped so
-the bundle is pure-Python and not tied to one Python ABI version.
+### Cluster name
 
-Set `PYTHON=/path/to/python` to build with a specific interpreter (it just needs
-`pip`; the produced bundle runs on plain `python3`):
+`--cluster-name NAME` (`-c`) sets `CLUSTER_NAME`. If you leave it out, the tool
+tries to derive the name from the hostnames. That works only when they share a
+prefix ending in digits followed by `rb`: nodes `clus1rbms001.foo.local` and
+`clus1rbwk001.foo.local` give `clus1`. Otherwise the tool stops with an error
+and asks for `--cluster-name`.
 
-```bash
-make build PYTHON=python3.11
-```
+### Proxy
 
-## Make targets
-
-```
-make dev       Create .venv and install dev + runtime deps
-make test      Run the test suite
-make golden    Regenerate golden CLI test outputs
-make build     Build the standalone tarball (alias: make dist)
-make clean     Remove build artifacts (dist/, build/, caches)
-```
-
-## Development setup
-
-Set up a local virtualenv (or just run `make dev`):
+`--proxy URL` sets `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and `https_proxy`
+to the same value. `NO_PROXY` is left as it is in your template.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
+customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml \
+    --proxy http://proxy.example.com:3128
 ```
 
-During development invoke the script directly as
-`.venv/bin/python customize_daemonset.py …`.
+### Limit total cluster usage
 
-## Tests
+`--max-total-cpu` and `--max-total-memory` cap the sum of requests across all
+pods:
 
 ```bash
-make test
-# or: .venv/bin/pytest -v
+customize-daemonset -b template.yaml -n nodes.yaml -o customized.yaml \
+    --max-total-cpu 100 --max-total-memory 200Gi
 ```
 
-Refresh golden CLI test outputs after an intentional output change:
+If the total would exceed a cap, the per-core part of that resource is scaled
+down evenly across every DaemonSet. The fixed 1Gi of memory per pod is never
+scaled, so a memory cap below 1Gi times the node count is an error. So is a CPU
+cap low enough to round any pod's request down to zero.
 
-```bash
-make golden
-# or: UPDATE_GOLDEN=1 .venv/bin/pytest tests/test_cli_golden.py
-```
+### Turn interactive choices into a script
 
-### Manual interactive smoke test
+`--print-cli` (`-p`) runs the prompts, then prints the matching
+non-interactive command instead of writing output. Paste it into a script or
+CI job.
 
-The InquirerPy prompts aren't auto-tested. Before releasing, run these by hand
-in a real terminal:
+## How resources are sized
 
-1. **Missing-args prompt:** `./customize_daemonset.py` -> prompts for `--base`
-   then `--nodes`. Ctrl-C should exit with code 130.
-2. **Taint checkbox:** Use a nodes file with a tainted node (e.g.,
-   `tests/fixtures/nodes/with_taints.yaml`). Run with `--base` only and confirm
-   the checkbox shows each distinct taint with host counts.
-3. **Interactive override:** `--interactive` should prompt even when both
-   `--base` and `--nodes` are supplied.
-4. **Cancel mid-prompt:** Ctrl-C during the taint checkbox should exit cleanly
-   with code 130 and no traceback.
+For a node with `cores` CPUs, and `C` set by `--cpu-request-per-core` (default
+`50m`):
+
+| Resource       | Value                                |
+| -------------- | ------------------------------------ |
+| CPU request    | `cores × C`                          |
+| CPU limit      | the larger of 2 CPUs and the request |
+| Memory request | `1Gi + cores × 10Mi`                 |
+| Memory limit   | 2 × memory request                   |
+
+An 8-core node with the defaults gets a 400m CPU request, a 2-CPU limit, a
+1104Mi memory request and a 2208Mi memory limit.
+
+## Options
+
+| Option | Meaning |
+| ------ | ------- |
+| `-b`, `--base FILE` | DaemonSet manifest to customize |
+| `-n`, `--nodes FILE` | Output of `kubectl get nodes -o yaml` |
+| `-o`, `--out FILE` | Where to write the result (default: stdout) |
+| `-c`, `--cluster-name NAME` | Value for `CLUSTER_NAME` |
+| `--proxy URL` | Value for the four proxy variables |
+| `-t`, `--tolerate KEY[=VALUE]:EFFECT` | Tolerate this taint (repeatable) |
+| `-T`, `--tolerate-all` | Tolerate every taint found on the nodes |
+| `--cpu-request-per-core QTY` | CPU request per core (default `50m`) |
+| `--max-total-cpu QTY` | Cap on total CPU requests, e.g. `100` or `50000m` |
+| `--max-total-memory QTY` | Cap on total memory requests, e.g. `200Gi` |
+| `-i`, `--interactive` | Prompt for every input, even ones given as flags |
+| `-p`, `--print-cli` | Print the equivalent command and exit |
 
 ## Limits
 
-- Exactly one DaemonSet in the base. Multiple DaemonSets are a hard error.
-- Exactly one container in the DaemonSet. Multi-container pods and init
-  containers are hard errors.
-- The base manifest must not define its own tolerations — rejected.
-- A file previously produced by this tool is rejected as `--base`.
-- Resources, node affinity, tolerations, and container env vars (`CLUSTER_NAME`
-  and the proxy vars) are the only DaemonSet fields modified.
-- See `docs/design.md` "Out of Scope" for details.
+The tool stops with an error, rather than guessing, when:
+
+- the input has more than one DaemonSet;
+- the DaemonSet has more than one container, or any init containers;
+- the DaemonSet already sets tolerations (the tool manages them, so remove them
+  from the template);
+- the input is a file this tool generated;
+- `CLUSTER_NAME` can't be derived and `--cluster-name` wasn't given.
+
+## Development
+
+See [docs/development.md](docs/development.md) for running the tests and
+building the bundle.

@@ -1,0 +1,226 @@
+# Synthetic `kubectl get nodes -o yaml` output: 3 tainted control-plane
+# nodes (4 cores), 5 workers (16 cores, one cordoned) and 2 large nodes
+# (32 cores, one with a dedicated=analytics taint).
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: cp-1.example.internal
+    labels:
+      kubernetes.io/hostname: cp-1.example.internal
+      kubernetes.io/os: linux
+      node-role.kubernetes.io/control-plane: ""
+  spec:
+    taints:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+  status:
+    capacity:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    allocatable:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: cp-2.example.internal
+    labels:
+      kubernetes.io/hostname: cp-2.example.internal
+      kubernetes.io/os: linux
+      node-role.kubernetes.io/control-plane: ""
+  spec:
+    taints:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+  status:
+    capacity:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    allocatable:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: cp-3.example.internal
+    labels:
+      kubernetes.io/hostname: cp-3.example.internal
+      kubernetes.io/os: linux
+      node-role.kubernetes.io/control-plane: ""
+  spec:
+    taints:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+  status:
+    capacity:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    allocatable:
+      cpu: "4"
+      memory: 15Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: worker-01.example.internal
+    labels:
+      kubernetes.io/hostname: worker-01.example.internal
+      kubernetes.io/os: linux
+  spec: {}
+  status:
+    capacity:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    allocatable:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: worker-02.example.internal
+    labels:
+      kubernetes.io/hostname: worker-02.example.internal
+      kubernetes.io/os: linux
+  spec: {}
+  status:
+    capacity:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    allocatable:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: worker-03.example.internal
+    labels:
+      kubernetes.io/hostname: worker-03.example.internal
+      kubernetes.io/os: linux
+  spec: {}
+  status:
+    capacity:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    allocatable:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: worker-04.example.internal
+    labels:
+      kubernetes.io/hostname: worker-04.example.internal
+      kubernetes.io/os: linux
+  spec: {}
+  status:
+    capacity:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    allocatable:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: worker-05.example.internal
+    labels:
+      kubernetes.io/hostname: worker-05.example.internal
+      kubernetes.io/os: linux
+  spec:
+    unschedulable: true
+    taints:
+    - key: node.kubernetes.io/unschedulable
+      effect: NoSchedule
+  status:
+    capacity:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    allocatable:
+      cpu: "16"
+      memory: 62Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: bigmem-01.example.internal
+    labels:
+      kubernetes.io/hostname: bigmem-01.example.internal
+      kubernetes.io/os: linux
+  spec: {}
+  status:
+    capacity:
+      cpu: "32"
+      memory: 250Gi
+      pods: "110"
+    allocatable:
+      cpu: "32"
+      memory: 250Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: bigmem-02.example.internal
+    labels:
+      kubernetes.io/hostname: bigmem-02.example.internal
+      kubernetes.io/os: linux
+  spec:
+    taints:
+    - key: dedicated
+      value: analytics
+      effect: NoSchedule
+  status:
+    capacity:
+      cpu: "32"
+      memory: 250Gi
+      pods: "110"
+    allocatable:
+      cpu: "32"
+      memory: 250Gi
+      pods: "110"
+    conditions:
+    - type: Ready
+      status: "True"
