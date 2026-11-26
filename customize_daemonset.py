@@ -812,12 +812,12 @@ def build_argparser() -> argparse.ArgumentParser:
     tolerate_group.add_argument(
         "-t", "--tolerate", action="append", default=[],
         metavar="KEY[=VALUE]:EFFECT",
-        help="replace base manifest tolerations with these (repeatable)",
+        help="tolerate this taint (repeatable); the variants get exactly "
+             "these tolerations",
     )
     tolerate_group.add_argument(
         "-T", "--tolerate-all", action="store_true",
-        help="auto-tolerate every distinct taint detected on input nodes "
-             "(augments base manifest tolerations; works in non-interactive mode)",
+        help="tolerate every distinct taint found on the input nodes",
     )
     p.add_argument("-i", "--interactive", action="store_true",
                    help="force interactive prompts for all inputs")
