@@ -200,6 +200,23 @@ For a node with `cores` CPUs, and `C` set by `--cpu-request-per-core` (default
 An 8-core node with the defaults gets a 400m CPU request, a 2-CPU limit, a
 1104Mi memory request and a 2208Mi memory limit.
 
+## Cluster Monitor resources
+
+The tool copies the Cluster Monitor Deployment through without changing its
+resources, so set them in your template. We recommend the same values for
+clusters of any size:
+
+| | Request | Limit |
+| --- | --- | --- |
+| CPU | 100m | 600m |
+| Memory | 600Mi | 600Mi |
+
+These come from measuring Cluster Monitors in production on clusters of up to
+about 2,300 pods. Average CPU use stayed under 60m on every cluster, and short
+bursts reached about 600m whatever the cluster's size. Memory peaked under
+600 MiB. The memory request equals the limit because a container that goes over
+its memory limit is killed and restarted.
+
 ## Options
 
 | Option | Meaning |

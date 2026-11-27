@@ -77,13 +77,12 @@ spec:
           value: CHANGE_ME
         - name: K8SMONITOR
           value: "true"
-        # Suitable for ordinary-sized clusters; very large clusters need more.
-        # The tool passes this Deployment through without changing its
-        # resources, so these are the values that get deployed.
+        # Recommended for clusters of any size (see the README). The tool
+        # passes this Deployment through without changing its resources.
         resources:
           requests:
-            cpu: 200m
-            memory: 512Mi
+            cpu: 100m
+            memory: 600Mi
           limits:
-            cpu: 400m
-            memory: 512Mi
+            cpu: 600m
+            memory: 600Mi
